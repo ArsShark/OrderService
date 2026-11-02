@@ -1,0 +1,6 @@
+# Profile "local": the application runs on the host (IDE or .\mvnw spring-boot:run),
+# PostgreSQL is reachable on localhost. Environment variables override every default.
+# Credentials (DB_USERNAME, DB_PASSWORD) have no defaults and are never stored in this file.
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5435}/${DB_NAME:order_service_db}
