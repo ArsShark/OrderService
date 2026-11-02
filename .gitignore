@@ -1,0 +1,21 @@
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# Build output
+target/
+build/
+.gradle/
+
+# Log4j2 output (logs/ folder)
+logs/
+
+# Local secrets and environment variables
+.env
+
+# OS
+.DS_Store
+Thumbs.db
