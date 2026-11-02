@@ -1,0 +1,22 @@
+spring:
+  application:
+    name: order-service
+  profiles:
+    # Used when no profile is set (IDE, .\mvnw spring-boot:run).
+    default: local
+  datasource:
+    # The URL is defined per profile (application-local.yml).
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+server:
+  port: ${SERVER_PORT:8083}
+logging:
+  level:
+    # At WARN Hibernate logs the DETAIL of a failed statement, which holds real emails.
+    org.hibernate.orm.jdbc.error: ERROR

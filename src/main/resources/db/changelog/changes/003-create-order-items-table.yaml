@@ -1,0 +1,93 @@
+databaseChangeLog:
+  - changeSet:
+      id: create-order-items-table
+      author: arsshark
+      changes:
+        - createTable:
+            tableName: order_items
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: pk_order_items
+              - column:
+                  name: order_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: item_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: quantity
+                  type: INTEGER
+                  constraints:
+                    nullable: false
+              # The price of one piece when the order was made (a snapshot of items.price).
+              - column:
+                  name: unit_price
+                  type: NUMERIC(12, 2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMP WITH TIME ZONE
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP WITH TIME ZONE
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+
+  - changeSet:
+      id: add-order-items-constraints
+      author: arsshark
+      changes:
+        # The lines go with their order.
+        - addForeignKeyConstraint:
+            constraintName: fk_order_items_order
+            baseTableName: order_items
+            baseColumnNames: order_id
+            referencedTableName: orders
+            referencedColumnNames: id
+            onDelete: CASCADE
+        # An item that is used by a line cannot be removed from the table.
+        - addForeignKeyConstraint:
+            constraintName: fk_order_items_item
+            baseTableName: order_items
+            baseColumnNames: item_id
+            referencedTableName: items
+            referencedColumnNames: id
+            onDelete: RESTRICT
+        # One line per item and order. Its index also serves the lookup of the lines of an
+        # order, so order_id needs no index of its own.
+        - addUniqueConstraint:
+            constraintName: uq_order_items_order_id_item_id
+            tableName: order_items
+            columnNames: order_id, item_id
+        - sql:
+            dbms: postgresql
+            sql: ALTER TABLE order_items ADD CONSTRAINT ck_order_items_quantity_positive CHECK (quantity > 0)
+        - sql:
+            dbms: postgresql
+            sql: ALTER TABLE order_items ADD CONSTRAINT ck_order_items_unit_price_non_negative CHECK (unit_price >= 0)
+
+  # PostgreSQL does not index a foreign key column itself.
+  - changeSet:
+      id: create-order-items-indexes
+      author: arsshark
+      changes:
+        - createIndex:
+            indexName: idx_order_items_item_id
+            tableName: order_items
+            columns:
+              - column:
+                  name: item_id

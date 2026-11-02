@@ -1,0 +1,93 @@
+databaseChangeLog:
+  - changeSet:
+      id: create-orders-table
+      author: arsshark
+      changes:
+        - createTable:
+            tableName: orders
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: pk_orders
+              # The id of the user in the User Service: no foreign key, the tables live in
+              # different databases.
+              - column:
+                  name: user_id
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              # A copy of the email from the token: the lookup of the user is done by email.
+              - column:
+                  name: user_email
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: status
+                  type: VARCHAR(20)
+                  defaultValue: PENDING
+                  constraints:
+                    nullable: false
+              - column:
+                  name: total_price
+                  type: NUMERIC(12, 2)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: deleted
+                  type: BOOLEAN
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMP WITH TIME ZONE
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP WITH TIME ZONE
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+
+  - changeSet:
+      id: add-orders-constraints
+      author: arsshark
+      changes:
+        - sql:
+            dbms: postgresql
+            sql: |-
+              ALTER TABLE orders ADD CONSTRAINT ck_orders_status
+                CHECK (status IN ('PENDING', 'PAID', 'PAYMENT_FAILED', 'CANCELLED'))
+        - sql:
+            dbms: postgresql
+            sql: ALTER TABLE orders ADD CONSTRAINT ck_orders_total_price_non_negative CHECK (total_price >= 0)
+
+  # Both indexes start with the column of the filter and end with created_at, so one index serves
+  # the filter and the sort of the list (newest first). A query by date range alone has no index.
+  - changeSet:
+      id: create-orders-indexes
+      author: arsshark
+      changes:
+        - createIndex:
+            indexName: idx_orders_user_id_created_at
+            tableName: orders
+            columns:
+              - column:
+                  name: user_id
+              - column:
+                  name: created_at
+        - createIndex:
+            indexName: idx_orders_status_created_at
+            tableName: orders
+            columns:
+              - column:
+                  name: status
+              - column:
+                  name: created_at
