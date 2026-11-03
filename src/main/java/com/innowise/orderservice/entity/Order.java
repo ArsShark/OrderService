@@ -11,6 +11,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.OrderBy;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
@@ -60,6 +61,16 @@ public class Order extends AuditableEntity {
   private boolean deleted;
 
   /**
+   * Counter of optimistic locking. Hibernate adds {@code AND version = ?} to every update and
+   * increments the value, so an update of an order that somebody else changed meanwhile touches
+   * no row and fails with an optimistic locking exception instead of overwriting that change.
+   */
+  @Version
+  @Column(name = "version", nullable = false)
+  @Setter(AccessLevel.NONE)
+  private long version;
+
+  /**
    * Lines of the order. This is the inverse side of the association: the foreign key lives in
    * {@code order_items.order_id}. There is no setter, because replacing the collection instance
    * breaks {@code orphanRemoval}; use {@link #addItem} and {@link #removeItem}.
@@ -68,6 +79,15 @@ public class Order extends AuditableEntity {
   @OrderBy("id")
   @Setter(AccessLevel.NONE)
   private List<OrderItem> items = new ArrayList<>();
+
+  /**
+   * Marks the order as deleted. The row stays in the table and disappears from every query of
+   * this entity. The change goes through dirty checking, so JPA Auditing sets {@code updatedAt}
+   * from the application clock. Calling it again changes nothing.
+   */
+  public void markDeleted() {
+    deleted = true;
+  }
 
   /**
    * Adds the line to this order and sets the owning side of the association.
