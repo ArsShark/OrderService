@@ -1,0 +1,16 @@
+databaseChangeLog:
+  - changeSet:
+      id: add-orders-version
+      author: arsshark
+      changes:
+        # The counter of optimistic locking (@Version): a stale update touches 0 rows and fails.
+        # Existing rows start at 0, the same value Hibernate gives a new order.
+        - addColumn:
+            tableName: orders
+            columns:
+              - column:
+                  name: version
+                  type: BIGINT
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false

@@ -28,7 +28,8 @@ class SmokeIntegrationTest extends AbstractIntegrationTest {
       "create-orders-indexes",
       "create-order-items-table",
       "add-order-items-constraints",
-      "create-order-items-indexes"), applied);
+      "create-order-items-indexes",
+      "add-orders-version"), applied);
   }
 
   @Test

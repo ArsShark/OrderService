@@ -51,6 +51,7 @@ class SchemaIntegrationTest extends AbstractIntegrationTest {
       "status", "character varying(20)",
       "total_price", "numeric(12,2)",
       "deleted", "boolean",
+      "version", "bigint",
       "created_at", TIMESTAMPTZ,
       "updated_at", TIMESTAMPTZ), columnsOf("orders"));
   }
@@ -129,6 +130,8 @@ class SchemaIntegrationTest extends AbstractIntegrationTest {
         "SELECT status FROM orders WHERE id = ?", String.class, orderId)),
       () -> assertEquals(false, jdbcTemplate.queryForObject(
         "SELECT deleted FROM orders WHERE id = ?", Boolean.class, orderId)),
+      () -> assertEquals(0L, jdbcTemplate.queryForObject(
+        "SELECT version FROM orders WHERE id = ?", Long.class, orderId)),
       () -> assertNotNull(jdbcTemplate.queryForObject(
         "SELECT created_at FROM orders WHERE id = ?", Object.class, orderId)),
       () -> assertNotNull(jdbcTemplate.queryForObject(

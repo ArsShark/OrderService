@@ -82,7 +82,10 @@ class EntityMappingIntegrationTest extends AbstractIntegrationTest {
       () -> assertEquals(START, times[0]),
       () -> assertEquals(START.plus(Duration.ofHours(1)), times[1]),
       () -> assertEquals("PAID", jdbcTemplate.queryForObject(
-        "SELECT status FROM orders WHERE id = ?", String.class, orderId)));
+        "SELECT status FROM orders WHERE id = ?", String.class, orderId)),
+      // One update, so the optimistic locking counter went from 0 to 1.
+      () -> assertEquals(1L, jdbcTemplate.queryForObject(
+        "SELECT version FROM orders WHERE id = ?", Long.class, orderId)));
   }
 
   @Test
