@@ -12,6 +12,11 @@ spring:
     hibernate:
       ddl-auto: validate
     open-in-view: false
+    properties:
+      hibernate:
+        # Lazy collections and references of a page of orders are loaded for up to 50 owners at
+        # once (one query per level) instead of one query per order: no N+1.
+        default_batch_fetch_size: 50
   liquibase:
     change-log: classpath:db/changelog/db.changelog-master.yaml
 server:

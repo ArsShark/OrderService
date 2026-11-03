@@ -20,13 +20,15 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * {@code @DirtiesContext} or extra {@code @Import}. Properties that every test needs belong to
  * this class.
  *
+ * <p>Hibernate statistics are on, so a test can count the SQL statements of an operation.
+ *
  * <p>The tests are not transactional on purpose. A test transaction would hide the commit, and
  * with it the constraints that fire at commit, the row locks and the concurrent requests that
  * later integration tests are written to check. Instead, {@link #resetState()} empties the
  * database and resets the clock before every test.
  */
 @Tag("integration")
-@SpringBootTest
+@SpringBootTest(properties = "spring.jpa.properties.hibernate.generate_statistics=true")
 @Import({TestcontainersConfiguration.class, TestClockConfiguration.class})
 abstract class AbstractIntegrationTest {
 

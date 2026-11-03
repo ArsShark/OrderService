@@ -5,3 +5,5 @@ databaseChangeLog:
       file: db/changelog/changes/002-create-orders-table.yaml
   - include:
       file: db/changelog/changes/003-create-order-items-table.yaml
+  - include:
+      file: db/changelog/changes/004-add-orders-version.yaml

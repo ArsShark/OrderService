@@ -4,7 +4,7 @@ Order management microservice of the course e-commerce application
 (Innowise Java Advanced). Part of a system with Authentication Service,
 API Gateway, User Service and Payment Service.
 
-> Work in progress: the database schema and the entities are done (JACAG-12).
+> Work in progress: the database schema, the entities and the DAO layer are done (JACAG-12, JACAG-13).
 
 ## Stack
 
@@ -58,13 +58,30 @@ $env:DB_PASSWORD = "<your password>"
 Liquibase creates the schema on startup (`src/main/resources/db/changelog`).
 
 - `items`: `id`, `name`, `price`, `deleted` (soft delete). Managed by an admin.
-- `orders`: `id`, `user_id`, `user_email`, `status`, `total_price`, `deleted` (soft delete).
+- `orders`: `id`, `user_id`, `user_email`, `status`, `total_price`, `deleted` (soft delete),
+  `version` (optimistic locking).
   `user_id` is a plain value: the user lives in the User Service.
 - `order_items`: `id`, `order_id`, `item_id`, `quantity`, `unit_price`. `unit_price` is a copy of
   the price at the moment of the order, so a price change does not change old orders.
 
 Every table also has `created_at` and `updated_at` (JPA Auditing, time from the application clock).
 Order statuses: `PENDING`, `PAID`, `PAYMENT_FAILED`, `CANCELLED`.
+
+## Data access (DAO layer)
+
+- `OrderRepository` extends the marker `Repository`, not `JpaRepository`, and exposes only
+  `saveAndFlush`, `findById`, `findAll(Specification, Pageable)` and `findAllByUserId`. There is
+  no `delete`: an order is deleted softly with `Order.markDeleted()`.
+- Deleted orders are hidden by `@SQLRestriction("deleted = false")` on the entity, so every query
+  (and the count query of a page) skips them. Items are not hidden this way: the lines of old
+  orders must still see them.
+- `OrderSpecifications` builds the filter of the order list: creation date range
+  (`created_at >= from AND created_at < before`, half-open), statuses, owner. A filter that is not
+  set does not appear in the query.
+- `@Version` on `Order`: saving an order that somebody else changed meanwhile fails with an
+  optimistic locking exception instead of overwriting the other change.
+- `hibernate.default_batch_fetch_size: 50` loads the lines and items of a whole page of orders in
+  a few queries instead of one query per order (N+1). `QueryCountIntegrationTest` guards it.
 
 ## Tests
 
