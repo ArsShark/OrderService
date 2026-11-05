@@ -1,5 +1,6 @@
 package com.innowise.orderservice.entity;
 
+import com.innowise.orderservice.exception.OrderStatusTransitionException;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -48,8 +49,13 @@ public class Order extends AuditableEntity {
   @Column(name = "user_email", nullable = false, length = 255)
   private String userEmail;
 
+  /**
+   * Status of the order. There is no setter: the status changes only through {@link #cancel()},
+   * {@link #markPaid()} and {@link #markPaymentFailed()}, which check the transition.
+   */
   @Enumerated(EnumType.STRING)
   @Column(name = "status", nullable = false, length = 20)
+  @Setter(AccessLevel.NONE)
   private OrderStatus status = OrderStatus.PENDING;
 
   /** Sum of {@code unitPrice * quantity} of the lines; always calculated by the server. */
@@ -79,6 +85,53 @@ public class Order extends AuditableEntity {
   @OrderBy("id")
   @Setter(AccessLevel.NONE)
   private List<OrderItem> items = new ArrayList<>();
+
+  /** Tells whether the lines of this order may still be replaced (PENDING or PAYMENT_FAILED). */
+  public boolean isEditable() {
+    return status.isEditable();
+  }
+
+  /**
+   * Cancels the order. An order that is cancelled already stays as it is, so a repeated request
+   * is harmless.
+   *
+   * @throws OrderStatusTransitionException if the order is PAID
+   */
+  public void cancel() {
+    if (status == OrderStatus.CANCELLED) {
+      return;
+    }
+    moveTo(OrderStatus.CANCELLED);
+  }
+
+  /**
+   * Marks the order as paid. An order that is paid already stays as it is, so a repeated
+   * payment event is harmless.
+   *
+   * @throws OrderStatusTransitionException if the order is CANCELLED
+   */
+  public void markPaid() {
+    if (status == OrderStatus.PAID) {
+      return;
+    }
+    moveTo(OrderStatus.PAID);
+  }
+
+  /**
+   * Marks the last payment as failed; the client may pay again.
+   *
+   * @throws OrderStatusTransitionException if the order is PAID or CANCELLED
+   */
+  public void markPaymentFailed() {
+    moveTo(OrderStatus.PAYMENT_FAILED);
+  }
+
+  private void moveTo(OrderStatus target) {
+    if (!status.canMoveTo(target)) {
+      throw new OrderStatusTransitionException(status, target);
+    }
+    status = target;
+  }
 
   /**
    * Marks the order as deleted. The row stays in the table and disappears from every query of
