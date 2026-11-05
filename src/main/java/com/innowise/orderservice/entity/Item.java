@@ -42,4 +42,13 @@ public class Item extends AuditableEntity {
   @Column(name = "deleted", nullable = false)
   @Setter(AccessLevel.NONE)
   private boolean deleted;
+
+  /**
+   * Hides the item from the catalog. The row stays in the table, and the lines of old orders keep
+   * their reference. The change goes through dirty checking, so JPA Auditing sets
+   * {@code updatedAt} from the application clock. Calling it again changes nothing.
+   */
+  public void markDeleted() {
+    deleted = true;
+  }
 }
