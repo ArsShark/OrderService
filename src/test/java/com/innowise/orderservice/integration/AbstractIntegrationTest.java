@@ -1,6 +1,7 @@
 package com.innowise.orderservice.integration;
 
 import com.innowise.orderservice.TestcontainersConfiguration;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Objects;
@@ -29,7 +30,8 @@ import org.springframework.test.context.DynamicPropertySource;
  * <p>The tests are not transactional on purpose. A test transaction would hide the commit, and
  * with it the constraints that fire at commit, the row locks and the concurrent requests that
  * later integration tests are written to check. Instead, {@link #resetState()} empties the
- * database, resets the clock and clears the stub of the User Service before every test.
+ * database, resets the clock, clears the stub of the User Service and closes the circuit
+ * breaker before every test.
  */
 @Tag("integration")
 @SpringBootTest(properties = {
@@ -56,6 +58,9 @@ abstract class AbstractIntegrationTest {
   @Autowired
   protected MutableClock clock;
 
+  @Autowired
+  protected CircuitBreaker userServiceCircuitBreaker;
+
   /**
    * Brings the shared state to the initial one: all tables are emptied and the identity counters
    * restart, so the first row of every test has the id 1; the clock shows {@link #START}.
@@ -66,6 +71,7 @@ abstract class AbstractIntegrationTest {
     jdbcTemplate.execute("TRUNCATE TABLE order_items, orders, items RESTART IDENTITY CASCADE");
     clock.set(START);
     UserServiceStub.reset();
+    userServiceCircuitBreaker.reset();
   }
 
   /** Counts the rows of a table of the application. */
