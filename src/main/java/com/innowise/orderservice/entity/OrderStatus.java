@@ -21,7 +21,7 @@ public enum OrderStatus {
   PAYMENT_FAILED,
 
   /** Cancelled by the owner or an admin before it was paid. */
-  CANCELLED
+  CANCELLED;
 
   /**
    * Tells whether an order in this status may move to the target status.
