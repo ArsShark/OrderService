@@ -21,6 +21,11 @@ spring:
     change-log: classpath:db/changelog/db.changelog-master.yaml
 server:
   port: ${SERVER_PORT:8083}
+app:
+  internal:
+    # The shared key of the internal endpoints of the other services (the header X-Internal-Key).
+    # It has no default: an empty value stops the startup.
+    api-key: ${INTERNAL_API_KEY}
 logging:
   level:
     # At WARN Hibernate logs the DETAIL of a failed statement, which holds real emails.
