@@ -49,6 +49,16 @@ final class UserServiceStub {
       .willReturn(WireMock.okJson(body)));
   }
 
+  /** Like {@link #respondWithUser}, but the answer comes after the given number of milliseconds. */
+  static void respondSlowlyWithUser(String email, long id, String name, String surname,
+    int delayMillis) {
+    String body = """
+      {"id":%d,"name":"%s","surname":"%s","email":"%s"}""".formatted(id, name, surname, email);
+    SERVER.stubFor(WireMock.get(WireMock.urlPathEqualTo(PATH))
+      .withQueryParam("email", WireMock.equalTo(email))
+      .willReturn(WireMock.okJson(body).withFixedDelay(delayMillis)));
+  }
+
   /** The answer for every email: the status and no body. */
   static void respondWithStatus(int status) {
     SERVER.stubFor(WireMock.get(WireMock.urlPathEqualTo(PATH))

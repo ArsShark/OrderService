@@ -5,11 +5,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.innowise.orderservice.TestEntities;
 import com.innowise.orderservice.dto.request.OrderItemRequest;
+import com.innowise.orderservice.dto.response.OrderDetailsResponse;
 import com.innowise.orderservice.dto.response.OrderItemResponse;
 import com.innowise.orderservice.dto.response.OrderResponse;
+import com.innowise.orderservice.dto.response.UserInfo;
 import com.innowise.orderservice.entity.Item;
 import com.innowise.orderservice.entity.Order;
 import com.innowise.orderservice.entity.OrderItem;
@@ -79,5 +82,41 @@ class OrderMapperTest {
       () -> assertEquals(new BigDecimal("59.90"), line.getUnitPrice()),
       () -> assertNull(line.getOrder()),
       () -> assertNull(line.getId()));
+  }
+
+  @Test
+  void toDetailsKeepsTheOrderAndAddsTheOwner() {
+    Item keyboard = TestEntities.item(3L, "Keyboard", "59.90");
+    OrderResponse order = mapper.toResponse(TestEntities.order(12L, 7L, "buyer@example.com",
+      TestEntities.line(keyboard, 2, "49.90")));
+    UserInfo owner = new UserInfo(7L, "Anna", "Petrova", "buyer@example.com");
+
+    OrderDetailsResponse details = mapper.toDetails(order, owner, true);
+
+    assertAll(
+      // The id of the order, not the id of the user: both records have one.
+      () -> assertEquals(12L, details.id()),
+      () -> assertEquals(7L, details.userId()),
+      () -> assertEquals(OrderStatus.PENDING, details.status()),
+      () -> assertEquals(new BigDecimal("99.80"), details.totalPrice()),
+      () -> assertEquals(order.items(), details.items()),
+      () -> assertEquals(TestEntities.CREATED_AT, details.createdAt()),
+      () -> assertEquals(TestEntities.UPDATED_AT, details.updatedAt()),
+      () -> assertSame(owner, details.user()),
+      () -> assertTrue(details.userInfoAvailable()));
+  }
+
+  @Test
+  void toDetailsWithoutAnOwnerKeepsTheFlag() {
+    OrderResponse order = mapper.toResponse(TestEntities.order(12L, 7L, "buyer@example.com"));
+
+    OrderDetailsResponse gone = mapper.toDetails(order, null, true);
+    OrderDetailsResponse unavailable = mapper.toDetails(order, null, false);
+
+    assertAll(
+      () -> assertNull(gone.user()),
+      () -> assertTrue(gone.userInfoAvailable()),
+      () -> assertNull(unavailable.user()),
+      () -> assertFalse(unavailable.userInfoAvailable()));
   }
 }

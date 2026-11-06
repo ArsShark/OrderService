@@ -1,8 +1,10 @@
 package com.innowise.orderservice.mapper;
 
 import com.innowise.orderservice.dto.request.OrderItemRequest;
+import com.innowise.orderservice.dto.response.OrderDetailsResponse;
 import com.innowise.orderservice.dto.response.OrderItemResponse;
 import com.innowise.orderservice.dto.response.OrderResponse;
+import com.innowise.orderservice.dto.response.UserInfo;
 import com.innowise.orderservice.entity.Item;
 import com.innowise.orderservice.entity.Order;
 import com.innowise.orderservice.entity.OrderItem;
@@ -49,4 +51,23 @@ public interface OrderMapper {
   @Mapping(target = "quantity", source = "request.quantity")
   @Mapping(target = "unitPrice", source = "unitPrice")
   OrderItem toLine(OrderItemRequest request, Item item, BigDecimal unitPrice);
+
+  /**
+   * Adds the owner to an order. Every field of the order is named, because the user also has an
+   * {@code id}, and MapStruct would not know which one is meant.
+   *
+   * @param order the order as the order service knows it
+   * @param user the owner, or {@code null}
+   * @param userInfoAvailable whether the User Service gave an answer at all
+   */
+  @Mapping(target = "id", source = "order.id")
+  @Mapping(target = "userId", source = "order.userId")
+  @Mapping(target = "status", source = "order.status")
+  @Mapping(target = "totalPrice", source = "order.totalPrice")
+  @Mapping(target = "items", source = "order.items")
+  @Mapping(target = "createdAt", source = "order.createdAt")
+  @Mapping(target = "updatedAt", source = "order.updatedAt")
+  @Mapping(target = "user", source = "user")
+  @Mapping(target = "userInfoAvailable", source = "userInfoAvailable")
+  OrderDetailsResponse toDetails(OrderResponse order, UserInfo user, boolean userInfoAvailable);
 }
