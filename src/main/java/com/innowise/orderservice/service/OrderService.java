@@ -108,8 +108,17 @@ public class OrderService {
       .map(orderMapper::toResponse);
   }
 
-  /** Returns a page of the orders of one user that match the filter; its owner is forced. */
+  /**
+   * Returns a page of the orders of one user that match the filter; its owner is forced.
+   *
+   * <p>A missing owner is refused instead of passed on: a filter without an owner means "every
+   * owner", so a caller without a profile (an admin whose token has no {@code user_id}) would
+   * get the orders of everybody.
+   *
+   * @throws NullPointerException if {@code userId} is {@code null}
+   */
   public Page<OrderResponse> findOwn(Long userId, OrderFilter filter, Pageable pageable) {
+    Objects.requireNonNull(userId, "own orders need the id of the owner");
     return findAll(filter.withUserId(userId), pageable);
   }
 
