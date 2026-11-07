@@ -1,10 +1,14 @@
 package com.innowise.orderservice.repository;
 
 import com.innowise.orderservice.entity.Order;
+import jakarta.persistence.LockModeType;
 import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.data.repository.Repository;
 
 /**
@@ -30,6 +34,18 @@ public interface OrderRepository extends Repository<Order, Long> {
 
   /** Finds a not deleted order by id. The lines are loaded lazily on first access. */
   Optional<Order> findById(Long id);
+
+  /**
+   * Finds a not deleted order and locks its row until the end of the transaction
+   * ({@code SELECT ... FOR UPDATE}). Every method that changes an order loads it this way: a
+   * payment that arrives at the same moment waits for the change and then sees its result, and an
+   * update of the lines cannot slip in after the order was paid. A change of the lines alone does
+   * not touch the row of the order (the collection is the inverse side), so {@code @Version}
+   * would not notice it.
+   */
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query("select o from Order o where o.id = :id")
+  Optional<Order> findByIdForUpdate(@Param("id") Long id);
 
   /**
    * Finds a page of not deleted orders that match the specification, see

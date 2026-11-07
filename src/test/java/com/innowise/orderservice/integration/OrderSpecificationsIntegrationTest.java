@@ -138,9 +138,19 @@ class OrderSpecificationsIntegrationTest extends AbstractIntegrationTest {
     Order order = new Order();
     order.setUserId(userId);
     order.setUserEmail(OWNER_EMAIL);
-    order.setStatus(status);
+    moveTo(order, status);
     order.setTotalPrice(new BigDecimal("10.00"));
     ids.put(name, orderRepository.saveAndFlush(order).getId());
+  }
+
+  /** Brings a new order to the status; every status can be reached from PENDING. */
+  private static void moveTo(Order order, OrderStatus status) {
+    switch (status) {
+      case PENDING -> { }
+      case PAID -> order.markPaid();
+      case PAYMENT_FAILED -> order.markPaymentFailed();
+      case CANCELLED -> order.cancel();
+    }
   }
 
   private static Instant day(int dayOfNovember, int hour) {

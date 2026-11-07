@@ -9,7 +9,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.innowise.orderservice.entity.Item;
 import com.innowise.orderservice.entity.Order;
 import com.innowise.orderservice.entity.OrderItem;
-import com.innowise.orderservice.entity.OrderStatus;
 import com.innowise.orderservice.repository.OrderRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -89,7 +88,7 @@ class OrderRepositoryIntegrationTest extends AbstractIntegrationTest {
 
     transaction.executeWithoutResult(status -> {
       Order order = orderRepository.findById(orderId).orElseThrow();
-      order.setStatus(OrderStatus.PAID);
+      order.markPaid();
       order.setTotalPrice(new BigDecimal("30.00"));
       // Replace the keyboard by the monitor. Hibernate runs inserts before deletes, so a line
       // of the SAME item must not be removed and added again in one flush (UNIQUE).
@@ -172,9 +171,9 @@ class OrderRepositoryIntegrationTest extends AbstractIntegrationTest {
     Order stale = transaction.execute(status -> orderRepository.findById(orderId).orElseThrow());
     // ... somebody else changes and commits it, ...
     transaction.executeWithoutResult(status ->
-      orderRepository.findById(orderId).orElseThrow().setStatus(OrderStatus.PAID));
+      orderRepository.findById(orderId).orElseThrow().markPaid());
     // ... and the first one tries to save a change that is based on the old state.
-    stale.setStatus(OrderStatus.CANCELLED);
+    stale.cancel();
 
     assertAll(
       () -> assertThrows(OptimisticLockingFailureException.class,

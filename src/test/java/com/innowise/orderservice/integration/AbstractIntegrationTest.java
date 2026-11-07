@@ -1,6 +1,7 @@
 package com.innowise.orderservice.integration;
 
 import com.innowise.orderservice.TestcontainersConfiguration;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Objects;
@@ -10,6 +11,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 
 /**
  * Base class of the integration tests: the whole application on a real PostgreSQL container.
@@ -20,15 +23,20 @@ import org.springframework.jdbc.core.JdbcTemplate;
  * {@code @DirtiesContext} or extra {@code @Import}. Properties that every test needs belong to
  * this class.
  *
- * <p>Hibernate statistics are on, so a test can count the SQL statements of an operation.
+ * <p>Hibernate statistics are on, so a test can count the SQL statements of an operation. The
+ * User Service is played by {@link UserServiceStub}; its address is set below, and the internal
+ * key of the application is {@link UserServiceStub#KEY}.
  *
  * <p>The tests are not transactional on purpose. A test transaction would hide the commit, and
  * with it the constraints that fire at commit, the row locks and the concurrent requests that
  * later integration tests are written to check. Instead, {@link #resetState()} empties the
- * database and resets the clock before every test.
+ * database, resets the clock, clears the stub of the User Service and closes the circuit
+ * breaker before every test.
  */
 @Tag("integration")
-@SpringBootTest(properties = "spring.jpa.properties.hibernate.generate_statistics=true")
+@SpringBootTest(properties = {
+  "spring.jpa.properties.hibernate.generate_statistics=true",
+  "app.internal.api-key=test-internal-key"})
 @Import({TestcontainersConfiguration.class, TestClockConfiguration.class})
 abstract class AbstractIntegrationTest {
 
@@ -38,11 +46,20 @@ abstract class AbstractIntegrationTest {
   /** The email of the owner of the orders that the helpers insert. */
   protected static final String OWNER_EMAIL = "buyer@example.com";
 
+  /** Gives the context the address of the stub that plays the User Service. */
+  @DynamicPropertySource
+  static void userServiceAddress(DynamicPropertyRegistry registry) {
+    registry.add("app.user-service.base-uri", UserServiceStub::baseUri);
+  }
+
   @Autowired
   protected JdbcTemplate jdbcTemplate;
 
   @Autowired
   protected MutableClock clock;
+
+  @Autowired
+  protected CircuitBreaker userServiceCircuitBreaker;
 
   /**
    * Brings the shared state to the initial one: all tables are emptied and the identity counters
@@ -53,6 +70,8 @@ abstract class AbstractIntegrationTest {
     // Only the tables of the application, not the tables of Liquibase.
     jdbcTemplate.execute("TRUNCATE TABLE order_items, orders, items RESTART IDENTITY CASCADE");
     clock.set(START);
+    UserServiceStub.reset();
+    userServiceCircuitBreaker.reset();
   }
 
   /** Counts the rows of a table of the application. */

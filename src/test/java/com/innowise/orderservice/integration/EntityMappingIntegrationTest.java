@@ -8,7 +8,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.innowise.orderservice.entity.Item;
 import com.innowise.orderservice.entity.Order;
 import com.innowise.orderservice.entity.OrderItem;
-import com.innowise.orderservice.entity.OrderStatus;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import java.math.BigDecimal;
@@ -72,7 +71,7 @@ class EntityMappingIntegrationTest extends AbstractIntegrationTest {
     clock.advance(Duration.ofHours(1));
 
     transaction.executeWithoutResult(status ->
-      entityManager.find(Order.class, orderId).setStatus(OrderStatus.PAID));
+      entityManager.find(Order.class, orderId).markPaid());
 
     Instant[] times = transaction.execute(status -> {
       Order order = entityManager.find(Order.class, orderId);
