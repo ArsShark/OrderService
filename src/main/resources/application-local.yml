@@ -5,6 +5,9 @@ spring:
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5435}/${DB_NAME:order_service_db}
 app:
+  security:
+    # The internal address of the Authentication Service, never the address of the API Gateway.
+    jwks-uri: ${AUTH_JWKS_URI:http://localhost:8081/.well-known/jwks.json}
   user-service:
     # The internal address of the User Service, never the address of the API Gateway.
     base-uri: ${USER_SERVICE_URI:http://localhost:8082}

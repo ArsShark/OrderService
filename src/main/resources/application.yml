@@ -19,13 +19,24 @@ spring:
         default_batch_fetch_size: 50
   liquibase:
     change-log: classpath:db/changelog/db.changelog-master.yaml
+  data:
+    web:
+      pageable:
+        # Spring caps a larger "size" silently; the API promises at most 100 per page.
+        max-page-size: 100
 server:
   port: ${SERVER_PORT:8083}
+  # The services are reachable only inside the network, so they may trust the X-Forwarded-*
+  # headers of the API Gateway: the Location of a created resource points to the Gateway.
+  forward-headers-strategy: framework
 app:
   internal:
     # The shared key of the internal endpoints of the other services (the header X-Internal-Key).
     # It has no default: an empty value stops the startup.
     api-key: ${INTERNAL_API_KEY}
+  security:
+    # Must equal the issuer of the Authentication Service (JWT_ISSUER there).
+    jwt-issuer: ${JWT_ISSUER:authentication-service}
 logging:
   level:
     # At WARN Hibernate logs the DETAIL of a failed statement, which holds real emails.
