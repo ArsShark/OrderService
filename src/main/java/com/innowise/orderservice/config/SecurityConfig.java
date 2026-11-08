@@ -94,6 +94,15 @@ public class SecurityConfig {
             .requestMatchers(HttpMethod.POST, "/api/items").hasRole(ADMIN)
             .requestMatchers(HttpMethod.PUT, "/api/items/*").hasRole(ADMIN)
             .requestMatchers(HttpMethod.DELETE, "/api/items/*").hasRole(ADMIN)
+            // Orders: the list of everybody's orders is for an admin; the rest is open to both
+            // roles and the service decides whose order it is (a foreign order is a 404).
+            .requestMatchers(HttpMethod.GET, "/api/orders").hasRole(ADMIN)
+            .requestMatchers(HttpMethod.POST, "/api/orders").hasAnyRole(ADMIN, USER)
+            .requestMatchers(HttpMethod.GET, "/api/orders/my").hasAnyRole(ADMIN, USER)
+            .requestMatchers(HttpMethod.GET, "/api/orders/*").hasAnyRole(ADMIN, USER)
+            .requestMatchers(HttpMethod.PUT, "/api/orders/*").hasAnyRole(ADMIN, USER)
+            .requestMatchers(HttpMethod.PATCH, "/api/orders/*/cancel").hasAnyRole(ADMIN, USER)
+            .requestMatchers(HttpMethod.DELETE, "/api/orders/*").hasAnyRole(ADMIN, USER)
             .anyRequest().denyAll())
         .build();
   }

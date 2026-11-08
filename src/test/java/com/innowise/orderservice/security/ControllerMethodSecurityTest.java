@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import com.innowise.orderservice.controller.ItemController;
+import com.innowise.orderservice.controller.OrderController;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
@@ -40,10 +41,26 @@ class ControllerMethodSecurityTest {
     assertEquals(expected, rulesOf(ItemController.class));
   }
 
+  /** Ownership is decided by the service; the controller only keeps out callers without a role. */
+  @Test
+  void everyHandlerMethodOfTheOrderControllerDeclaresItsRule() {
+    Map<String, String> expected = Map.of(
+      "create", AccessRules.ANY_ROLE,
+      "getById", AccessRules.ANY_ROLE,
+      "getAll", AccessRules.ADMIN_ONLY,
+      "getMy", AccessRules.ANY_ROLE,
+      "update", AccessRules.ANY_ROLE,
+      "cancel", AccessRules.ANY_ROLE,
+      "delete", AccessRules.ANY_ROLE);
+
+    assertEquals(expected, rulesOf(OrderController.class));
+  }
+
   @Test
   void theTableCoversEveryHandlerOfTheControllers() {
     assertAll(
-      () -> assertEquals(5, handlerMethods(ItemController.class).size()));
+      () -> assertEquals(5, handlerMethods(ItemController.class).size()),
+      () -> assertEquals(7, handlerMethods(OrderController.class).size()));
   }
 
   private static Map<String, String> rulesOf(Class<?> controller) {
