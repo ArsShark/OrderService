@@ -1,18 +1,27 @@
 package com.innowise.orderservice.integration;
 
+import com.innowise.orderservice.JwksTestServer;
+import com.innowise.orderservice.TestKeys;
+import com.innowise.orderservice.TestTokens;
 import com.innowise.orderservice.TestcontainersConfiguration;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultMatcher;
+import org.springframework.test.web.servlet.result.MockMvcResultMatchers;
 
 /**
  * Base class of the integration tests: the whole application on a real PostgreSQL container.
@@ -27,6 +36,12 @@ import org.springframework.test.context.DynamicPropertySource;
  * User Service is played by {@link UserServiceStub}; its address is set below, and the internal
  * key of the application is {@link UserServiceStub#KEY}.
  *
+ * <p>The tokens are verified the real way. A small HTTP server plays the key set endpoint of the
+ * Authentication Service, and the application reads its address from {@code app.security.jwks-uri}
+ * like in production. {@link #mockMvc} sends the token of an admin with every request; a test
+ * that needs another caller sets its own {@code Authorization} header, which wins over this
+ * default (see {@code TestSecurityConfiguration}).
+ *
  * <p>The tests are not transactional on purpose. A test transaction would hide the commit, and
  * with it the constraints that fire at commit, the row locks and the concurrent requests that
  * later integration tests are written to check. Instead, {@link #resetState()} empties the
@@ -37,20 +52,40 @@ import org.springframework.test.context.DynamicPropertySource;
 @SpringBootTest(properties = {
   "spring.jpa.properties.hibernate.generate_statistics=true",
   "app.internal.api-key=test-internal-key"})
-@Import({TestcontainersConfiguration.class, TestClockConfiguration.class})
+@AutoConfigureMockMvc
+@Import({TestcontainersConfiguration.class, TestClockConfiguration.class,
+  TestSecurityConfiguration.class})
 abstract class AbstractIntegrationTest {
 
   /** The instant the test clock shows at the start of every test. */
   protected static final Instant START = Instant.parse("2026-11-02T10:00:00Z");
 
+  /**
+   * The token that {@link #mockMvc} sends by default: an admin, valid for ten years, so that a
+   * test that moves the clock far ahead does not lose its caller.
+   */
+  protected static final String ADMIN_TOKEN = TestTokens.admin()
+    .expiresAt(TestTokens.ISSUED_AT.plus(Duration.ofDays(3650)))
+    .build();
+
   /** The email of the owner of the orders that the helpers insert. */
   protected static final String OWNER_EMAIL = "buyer@example.com";
+
+  /**
+   * The key set endpoint of the Authentication Service. It is never stopped: its threads are
+   * daemons, so they do not keep the JVM alive.
+   */
+  private static final JwksTestServer JWKS_SERVER = JwksTestServer.start(TestKeys.jwksJson());
 
   /** Gives the context the address of the stub that plays the User Service. */
   @DynamicPropertySource
   static void userServiceAddress(DynamicPropertyRegistry registry) {
     registry.add("app.user-service.base-uri", UserServiceStub::baseUri);
+    registry.add("app.security.jwks-uri", JWKS_SERVER::jwksUri);
   }
+
+  @Autowired
+  protected MockMvc mockMvc;
 
   @Autowired
   protected JdbcTemplate jdbcTemplate;
@@ -72,6 +107,22 @@ abstract class AbstractIntegrationTest {
     clock.set(START);
     UserServiceStub.reset();
     userServiceCircuitBreaker.reset();
+  }
+
+  /**
+   * The value of the {@code Authorization} header for a token.
+   *
+   * @param token a compact serialized token
+   * @return the header value
+   */
+  protected static String bearer(String token) {
+    return String.format("Bearer %s", token);
+  }
+
+  /** Matches an error response in the RFC 9457 format, {@code application/problem+json}. */
+  protected static ResultMatcher problemJson() {
+    return MockMvcResultMatchers.content()
+      .contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON);
   }
 
   /** Counts the rows of a table of the application. */

@@ -201,6 +201,17 @@ class OrderServiceTest {
   }
 
   @Test
+  void findOwnRefusesACallWithoutAnOwnerInsteadOfListingEveryOrder() {
+    Pageable pageable = PageRequest.of(0, 20);
+    OrderFilter filter = new OrderFilter(null, null, null, null);
+
+    assertAll(
+      () -> assertThrows(NullPointerException.class,
+        () -> orderService.findOwn(null, filter, pageable)),
+      () -> verifyNoInteractions(orderRepository));
+  }
+
+  @Test
   void theFilterOfAnOwnerIsRestrictedToThatOwnerWhateverItSaid() {
     OrderFilter asked = new OrderFilter(null, null, Set.of(OrderStatus.PAID), 8L);
 

@@ -36,6 +36,8 @@ The profile `local` is the default. Environment variables override every default
 | `LOG_DIR` | `logs` | folder of the log files |
 | `INTERNAL_API_KEY` | none, required | shared key of the internal endpoints of the other services; an empty value stops the startup |
 | `USER_SERVICE_URI` | `http://localhost:8082` | internal address of the User Service (never the API Gateway) |
+| `AUTH_JWKS_URI` | `http://localhost:8081/.well-known/jwks.json` | internal address of the key set of the Authentication Service (never the API Gateway) |
+| `JWT_ISSUER` | `authentication-service` | the issuer that a token must have; the same value as in the Authentication Service |
 
 The circuit breaker of the calls to the User Service is configured with
 `app.user-service.circuit-breaker.*`; the defaults are a window of 10 calls, at least 5 calls
@@ -62,6 +64,11 @@ $env:DB_PASSWORD = "<your password>"
 $env:INTERNAL_API_KEY = "<the same key as in the User Service>"
 .\mvnw spring-boot:run
 ```
+
+Every endpoint needs an access token, so the Authentication Service (port 8081) must be
+running: the service reads its key set on the first request with a token. The orders also need
+the User Service (port 8082) to show the owner; without it an order is still returned, with
+`userInfoAvailable = false`.
 
 ## Database schema
 
@@ -137,6 +144,57 @@ error, because an error would invite the client to send the same `POST` again.
 - **Limits of the request:** at most 50 lines, 1 to 1000 pieces per line, no item twice, item
   price up to 99999.99, so a total always fits into `NUMERIC(12,2)`.
 
+## REST API
+
+All paths are under `/api`. Every request needs `Authorization: Bearer <access token>`. Errors
+are `application/problem+json` (RFC 9457); a validation failure is a 400 with an `errors` list of
+`{field, message}` and never the rejected values.
+
+| Method and path | Who | Success | Errors |
+|---|---|---|---|
+| `POST /api/orders` | user or admin, with a profile | 201, `Location` | 400, 403 (no profile in the token), 422 (item not available, total too large) |
+| `GET /api/orders/{id}` | user (own order) or admin | 200 | 404 (also for the order of somebody else) |
+| `GET /api/orders` | admin | 200, a page | 400 |
+| `GET /api/orders/my` | user or admin, with a profile | 200, a page | 400, 403 (no profile in the token) |
+| `PUT /api/orders/{id}` | user (own order) or admin | 200 | 400, 404, 409 (status does not allow it), 422 |
+| `PATCH /api/orders/{id}/cancel` | user (own order) or admin | 200, also when already cancelled | 404, 409 (a paid order) |
+| `DELETE /api/orders/{id}` | user (own order, not paid) or admin | 204 | 404, 409 |
+| `GET /api/items`, `GET /api/items/{id}` | any role | 200 | 404 |
+| `POST /api/items`, `PUT /api/items/{id}`, `DELETE /api/items/{id}` | admin | 201 (`Location`), 200, 204 | 400, 403, 404 |
+
+- **Owner.** A new order belongs to the profile of the token (`user_id`); the body has no owner.
+  Its `userEmail` is the `email` claim. A token without `user_id` or `email` cannot place an
+  order or list "my" orders (403), also when it is an admin's: an order needs an owner.
+- **Lists.** `page` (from 0), `size` (default 20, at most 100) and `sort=<property>,<asc|desc>`.
+  The orders are sorted by `createdAt,desc` unless asked otherwise, the items by `id`. The
+  sortable properties are `status`, `totalPrice`, `userId`, `createdAt`, `updatedAt` for the
+  orders and `name`, `price`, `createdAt`, `updatedAt` for the items; `id` is always the last key.
+  The answer is `{content, page, size, totalElements, totalPages}`.
+- **Filters of the orders.** `createdFrom` and `createdBefore` are ISO-8601 instants
+  (`2026-11-01T00:00:00Z`) and make the half-open range `[createdFrom, createdBefore)`; a range
+  that is empty (`createdFrom` not before `createdBefore`) is a 400. `statuses` is a list
+  (`statuses=PENDING,PAID` or the parameter repeated). `userId` is for the admin's list only;
+  `/my` ignores it, the owner is always the caller.
+- **Location.** The `Location` of a created resource is built from the request URL, so behind
+  the API Gateway it points to the Gateway (`server.forward-headers-strategy: framework`).
+
+## Security
+
+The service is a resource server. A token is verified with the public key of the Authentication
+Service (`AUTH_JWKS_URI`): RS256 only, the issuer, the time (with no tolerance, by the clock of
+the application) and `token_type = access`. A key set that cannot be read is a 401, never a 500.
+The role comes from the claim `role` (only the exact `ADMIN` and `USER` count).
+
+- **Two layers.** `SecurityConfig` lists every path and method with the roles that may call it
+  and denies everything else (401 without a token, 403 with one, also for unknown paths). Every
+  controller method repeats its role with `@PreAuthorize`, and a test fails when a method has
+  none.
+- **Whose order.** The controller builds a `Caller` (profile, email, admin or not) from the
+  token; the service decides: a user reaches only his own orders, and an order of somebody else
+  is the same 404 as a missing one. An admin reaches every order.
+- 401 and 403 have constant texts (`Authentication is required`, `Access is denied`); every kind
+  of bad token gets the same answer. Tokens, emails and keys are never logged.
+
 ## Known limits
 
 - A `POST` whose answer is lost and is sent again creates a second order: there is no
@@ -150,6 +208,11 @@ error, because an error would invite the client to send the same `POST` again.
 - When the first lookup of a page fails, the rest of the page has no user data either, although
   the User Service might have answered for the other owners. This is on purpose: a hanging
   service would otherwise cost one timeout per owner.
+- A token lives 15 minutes and cannot be revoked: a user that is deactivated or deleted in the
+  User Service can still use a token that he already has until it expires.
+- The email of a token is the login of the Authentication Service. If an admin changes the email
+  of a profile, a new order stores the old one and the owner lookup finds nobody.
+- A 401 has no `WWW-Authenticate` header (RFC 9110 asks for one), as in the other services.
 - The payment of an order is started by the client in the Payment Service, which does not check
   the amount against the order (JACAG-24).
 
@@ -162,6 +225,12 @@ error, because an error would invite the client to send the same `POST` again.
 The integration tests (tag `integration`) start PostgreSQL with Testcontainers and need Docker.
 To skip them: `.\mvnw verify "-DexcludedGroups=integration"`. The JaCoCo report is written to
 `target/site/jacoco/`.
+
+The tokens are real: a small HTTP server plays the key set of the Authentication Service, and
+the application verifies them the way it does in production. The web layer is tested with
+`@WebMvcTest` and the real security chain, the access rules for every endpoint and caller with
+`AccessMatrixIntegrationTest`, and a key set that is down or stops with `KeySetNotAvailableTest`
+and `KeySetOutageTest`.
 
 The User Service is played by WireMock. Tests of the client use a generous read timeout (10 s)
 and a short one only in the test that proves the timeout; the breaker tests switch its state with
