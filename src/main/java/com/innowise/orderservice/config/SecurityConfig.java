@@ -5,6 +5,7 @@ import jakarta.servlet.DispatcherType;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -48,6 +49,9 @@ import org.springframework.web.servlet.HandlerExceptionResolver;
 @EnableMethodSecurity
 public class SecurityConfig {
 
+  private static final String ADMIN = "ADMIN";
+  private static final String USER = "USER";
+
   /**
    * Builds the one security filter chain of the service.
    *
@@ -84,6 +88,12 @@ public class SecurityConfig {
                 .jwtAuthenticationConverter(jwtConverter)))
         .authorizeHttpRequests(requests -> requests
             .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+            // Items: everybody with a role reads, only an admin changes.
+            .requestMatchers(HttpMethod.GET, "/api/items", "/api/items/*")
+            .hasAnyRole(ADMIN, USER)
+            .requestMatchers(HttpMethod.POST, "/api/items").hasRole(ADMIN)
+            .requestMatchers(HttpMethod.PUT, "/api/items/*").hasRole(ADMIN)
+            .requestMatchers(HttpMethod.DELETE, "/api/items/*").hasRole(ADMIN)
             .anyRequest().denyAll())
         .build();
   }
