@@ -179,8 +179,10 @@ class ItemControllerTest {
 
     ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
     verify(itemService).getAll(pageable.capture());
-    assertEquals(Sort.by(Sort.Order.desc("price"), Sort.Order.asc("id")),
-      pageable.getValue().getSort());
+    assertAll(
+      () -> assertEquals(20, pageable.getValue().getPageSize()),
+      () -> assertEquals(Sort.by(Sort.Order.desc("price"), Sort.Order.asc("id")),
+        pageable.getValue().getSort()));
   }
 
   @Test

@@ -326,6 +326,36 @@ class OrderControllerTest {
         pageable.getValue().getSort()));
   }
 
+  /** The same default for the own orders: newest first, 20 per page, id as the tiebreaker. */
+  @Test
+  void getMyUsesTheSameDefaultPageAsTheListOfEveryone() throws Exception {
+    when(orderFacade.findOwn(eq(7L), any(OrderFilter.class), any(Pageable.class)))
+      .thenReturn(pageOf());
+
+    mockMvc.perform(get("/api/orders/my").with(user())).andExpect(status().isOk());
+
+    ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+    verify(orderFacade).findOwn(eq(7L), any(OrderFilter.class), pageable.capture());
+    assertAll(
+      () -> assertEquals(0, pageable.getValue().getPageNumber()),
+      () -> assertEquals(20, pageable.getValue().getPageSize()),
+      () -> assertEquals(Sort.by(Sort.Order.desc("createdAt"), Sort.Order.asc("id")),
+        pageable.getValue().getSort()));
+  }
+
+  @Test
+  void getMyCapsThePageSizeAt100() throws Exception {
+    when(orderFacade.findOwn(eq(7L), any(OrderFilter.class), any(Pageable.class)))
+      .thenReturn(pageOf());
+
+    mockMvc.perform(get("/api/orders/my").with(user()).param("size", "1000"))
+      .andExpect(status().isOk());
+
+    ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+    verify(orderFacade).findOwn(eq(7L), any(OrderFilter.class), pageable.capture());
+    assertEquals(100, pageable.getValue().getPageSize());
+  }
+
   @Test
   void getAllCapsThePageSizeAt100() throws Exception {
     when(orderFacade.findAll(any(OrderFilter.class), any(Pageable.class)))

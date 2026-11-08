@@ -45,6 +45,12 @@ import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 @RequestMapping("/api/orders")
 public class OrderController {
 
+  /**
+   * The page size when the request has none. It is written down because {@code @PageableDefault}
+   * has a size of its own (10) that replaces the default of Spring Data (20).
+   */
+  private static final int DEFAULT_PAGE_SIZE = 20;
+
   private static final SortWhitelist SORT = SortWhitelist.of("status", "totalPrice", "userId",
       "createdAt", "updatedAt");
 
@@ -81,7 +87,8 @@ public class OrderController {
       @RequestParam(required = false) Instant createdBefore,
       @RequestParam(required = false) Set<OrderStatus> statuses,
       @RequestParam(required = false) Long userId,
-      @PageableDefault(sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
+      @PageableDefault(size = DEFAULT_PAGE_SIZE, sort = "createdAt",
+          direction = Sort.Direction.DESC) Pageable pageable) {
     OrderFilter filter = filterOf(createdFrom, createdBefore, statuses, userId);
     return ResponseEntity.ok(
         PageResponse.from(orderFacade.findAll(filter, SORT.apply(pageable))));
@@ -97,7 +104,8 @@ public class OrderController {
       @RequestParam(required = false) Instant createdFrom,
       @RequestParam(required = false) Instant createdBefore,
       @RequestParam(required = false) Set<OrderStatus> statuses,
-      @PageableDefault(sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
+      @PageableDefault(size = DEFAULT_PAGE_SIZE, sort = "createdAt",
+          direction = Sort.Direction.DESC) Pageable pageable) {
     Caller owner = Callers.owner(authentication);
     OrderFilter filter = filterOf(createdFrom, createdBefore, statuses, null);
     return ResponseEntity.ok(PageResponse.from(
