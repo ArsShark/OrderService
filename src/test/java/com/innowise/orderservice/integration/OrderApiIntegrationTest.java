@@ -96,6 +96,10 @@ class OrderApiIntegrationTest extends AbstractIntegrationTest {
         jsonPath("$.userInfoAvailable").value(true))
       .andReturn();
 
+    // Read the record of the calls before the GET below, which asks the User Service again.
+    int lookupsOfThePost = UserServiceStub.requestsReceived();
+    String emailOfThePost =
+      UserServiceStub.requests().get(0).queryParameter("email").firstValue();
     String read = bodyOf(mockMvc.perform(as(get("/api/orders/1"), ANNA))
       .andExpect(status().isOk()).andReturn());
     assertAll(
@@ -107,9 +111,8 @@ class OrderApiIntegrationTest extends AbstractIntegrationTest {
         jdbcTemplate.queryForList(
           "SELECT unit_price FROM order_items WHERE order_id = 1 ORDER BY id",
           BigDecimal.class)),
-      () -> assertEquals(1, UserServiceStub.requestsReceived()),
-      () -> assertEquals(ANNA_EMAIL,
-        UserServiceStub.requests().get(0).queryParameter("email").firstValue()),
+      () -> assertEquals(1, lookupsOfThePost, "one lookup for the POST"),
+      () -> assertEquals(ANNA_EMAIL, emailOfThePost),
       // What POST answers is what GET answers later.
       () -> assertEquals(bodyOf(created), read));
   }
