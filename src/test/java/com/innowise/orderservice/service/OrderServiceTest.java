@@ -363,4 +363,125 @@ class OrderServiceTest {
         () -> orderService.delete(ORDER_ID, STRANGER)),
       () -> assertFalse(order.isDeleted()));
   }
+
+  // ---- the other statuses and the other refusals
+
+  @Test
+  void updateRefusesAnItemThatIsNotAvailableAndSavesNothing() {
+    Order order = TestEntities.order(ORDER_ID, 7L, "buyer@example.com",
+      TestEntities.line(KEYBOARD, 1, "49.90"));
+    when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(order));
+    when(itemRepository.findAllByIdInAndDeletedFalse(any())).thenReturn(List.of(KEYBOARD));
+
+    ItemNotAvailableException thrown = assertThrows(ItemNotAvailableException.class,
+      () -> orderService.update(ORDER_ID, OWNER, new OrderRequest(
+        List.of(new OrderItemRequest(1L, 2), new OrderItemRequest(2L, 1)))));
+
+    assertAll(
+      () -> assertEquals("Item with id 2 is not available", thrown.getMessage()),
+      // The order is untouched: the items are checked before the lines are replaced.
+      () -> assertEquals(1, order.getItems().size()),
+      () -> assertEquals(1, order.getItems().get(0).getQuantity()),
+      () -> assertEquals(new BigDecimal("49.90"), order.getTotalPrice()),
+      () -> verify(orderRepository, never()).saveAndFlush(any()));
+  }
+
+  @Test
+  void updateRefusesATotalThatDoesNotFitIntoTheColumnAndSavesNothing() {
+    Item gold = TestEntities.item(9L, "Gold", "9999999999.00");
+    Order order = TestEntities.order(ORDER_ID, 7L, "buyer@example.com",
+      TestEntities.line(KEYBOARD, 1, "49.90"));
+    when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(order));
+    when(itemRepository.findAllByIdInAndDeletedFalse(any())).thenReturn(List.of(gold));
+
+    assertAll(
+      () -> assertThrows(OrderTotalTooLargeException.class, () -> orderService.update(ORDER_ID,
+        OWNER, new OrderRequest(List.of(new OrderItemRequest(9L, 2))))),
+      // The total is not replaced; the transaction rolls the replaced lines back.
+      () -> assertEquals(new BigDecimal("49.90"), order.getTotalPrice()),
+      () -> verify(orderRepository, never()).saveAndFlush(any()));
+  }
+
+  @Test
+  void anOrderWhosePaymentFailedCanBeEditedAndStaysPaymentFailed() {
+    Order order = TestEntities.order(ORDER_ID, 7L, "buyer@example.com",
+      TestEntities.line(KEYBOARD, 1, "49.90"));
+    order.markPaymentFailed();
+    when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(order));
+    when(itemRepository.findAllByIdInAndDeletedFalse(any())).thenReturn(List.of(MOUSE));
+    when(orderRepository.saveAndFlush(order)).thenReturn(order);
+
+    OrderResponse response = orderService.update(ORDER_ID, OWNER,
+      new OrderRequest(List.of(new OrderItemRequest(2L, 3))));
+
+    assertAll(
+      () -> assertEquals(OrderStatus.PAYMENT_FAILED, response.status()),
+      () -> assertEquals(new BigDecimal("59.70"), response.totalPrice()),
+      () -> assertEquals(List.of(2L),
+        order.getItems().stream().map(line -> line.getItem().getId()).toList()));
+  }
+
+  @Test
+  void aCancelledOrderStaysCancelledWhenItIsCancelledAgain() {
+    Order order = TestEntities.order(ORDER_ID, 7L, "buyer@example.com");
+    order.cancel();
+    when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(order));
+    when(orderRepository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+    OrderResponse response = orderService.cancel(ORDER_ID, OWNER);
+
+    assertEquals(OrderStatus.CANCELLED, response.status());
+  }
+
+  @Test
+  void anOrderWhosePaymentFailedCanBeCancelled() {
+    Order order = TestEntities.order(ORDER_ID, 7L, "buyer@example.com");
+    order.markPaymentFailed();
+    when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(order));
+    when(orderRepository.saveAndFlush(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+    OrderResponse response = orderService.cancel(ORDER_ID, OWNER);
+
+    assertEquals(OrderStatus.CANCELLED, response.status());
+  }
+
+  @Test
+  void anOwnerDeletesACancelledOrderAndAnOrderWhosePaymentFailed() {
+    Order cancelled = TestEntities.order(ORDER_ID, 7L, "buyer@example.com");
+    cancelled.cancel();
+    Order failed = TestEntities.order(6L, 7L, "buyer@example.com");
+    failed.markPaymentFailed();
+    when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(cancelled));
+    when(orderRepository.findByIdForUpdate(6L)).thenReturn(Optional.of(failed));
+
+    orderService.delete(ORDER_ID, OWNER);
+    orderService.delete(6L, OWNER);
+
+    assertAll(
+      () -> assertTrue(cancelled.isDeleted()),
+      () -> assertTrue(failed.isDeleted()),
+      () -> verify(orderRepository).saveAndFlush(cancelled),
+      () -> verify(orderRepository).saveAndFlush(failed));
+  }
+
+  @Test
+  void anAdminWithoutAProfileReadsTheOrderOfAnyUser() {
+    Order order = TestEntities.order(ORDER_ID, 7L, "buyer@example.com");
+    when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+
+    OrderResponse response = orderService.getById(ORDER_ID, new Caller(null, null, true));
+
+    assertAll(
+      () -> assertEquals(ORDER_ID, response.id()),
+      () -> assertEquals(7L, response.userId()));
+  }
+
+  @Test
+  void aCallerWithoutAProfileReadsNothing() {
+    Order order = TestEntities.order(ORDER_ID, 7L, "buyer@example.com");
+    when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+
+    assertThrows(OrderNotFoundException.class,
+      () -> orderService.getById(ORDER_ID, new Caller(null, null, false)));
+  }
 }

@@ -235,3 +235,35 @@ and `KeySetOutageTest`.
 The User Service is played by WireMock. Tests of the client use a generous read timeout (10 s)
 and a short one only in the test that proves the timeout; the breaker tests switch its state with
 `transitionTo...State()` and never wait for a clock.
+
+### What tests what
+
+Every public method of the service layer has unit tests (plain Mockito, no Spring, no database):
+
+| Class | Unit tests | Through the REST API, with PostgreSQL and WireMock |
+|---|---|---|
+| `OrderService` (`create`, `getById`, `findAll`, `findOwn`, `update`, `cancel`, `delete`) | `OrderServiceTest` | `OrderApiIntegrationTest`, `OrderListApiIntegrationTest`, `OrderOwnershipIntegrationTest`, `ApiConcurrencyIntegrationTest` |
+| `OrderFacade` (the same methods, with the owner of the order) | `OrderFacadeTest` | `OrderOwnerDataApiIntegrationTest` |
+| `ItemService` (`create`, `getById`, `getAll`, `update`, `delete`) | `ItemServiceTest` | `ItemApiIntegrationTest` |
+| `UserInfoResolver`, `UserServiceClient` (the User Service, the breaker) | `UserInfoResolverTest`, `UserServiceClientTest` | `OrderOwnerDataApiIntegrationTest` |
+| `PriceCalculator`, `Caller` | `PriceCalculatorTest`, `CallerTest` | `OrderApiIntegrationTest` (prices) |
+
+The API tests send real requests with real tokens to the whole application. They prove what the
+unit tests cannot: what is stored and what the answers show, ownership with two users, the
+filters, pages and sorting of the lists, the `Location` header behind the Gateway
+(`ForwardedHeadersIntegrationTest`), the answers when the User Service is down or its breaker is
+open, the row lock under parallel requests, and that no token, email, name or key reaches a log
+line (`ApiSecretsNotLoggedIntegrationTest`). `OrderVersionIntegrationTest` is an experiment on a
+real database: it shows what `@Version` of an order notices and what it does not, which is why
+every write takes a row lock.
+
+The helpers of the API tests (`ApiSupport`) are static and touch no Spring context: all
+integration tests share one context and one PostgreSQL container. An order becomes PAID only by
+a payment event, which arrives with the Kafka consumer; until then the tests set that status with
+SQL.
+
+Only the unit tests, to see what they cover:
+
+```powershell
+.\mvnw test "-DexcludedGroups=integration"
+```

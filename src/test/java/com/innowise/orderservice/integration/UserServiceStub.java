@@ -3,6 +3,7 @@ package com.innowise.orderservice.integration;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.client.WireMock;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
+import com.github.tomakehurst.wiremock.http.Fault;
 import com.github.tomakehurst.wiremock.verification.LoggedRequest;
 import java.util.List;
 
@@ -63,6 +64,12 @@ final class UserServiceStub {
   static void respondWithStatus(int status) {
     SERVER.stubFor(WireMock.get(WireMock.urlPathEqualTo(PATH))
       .willReturn(WireMock.aResponse().withStatus(status)));
+  }
+
+  /** The connection is reset before an answer is sent: the client sees a dropped connection. */
+  static void respondWithConnectionReset() {
+    SERVER.stubFor(WireMock.get(WireMock.urlPathEqualTo(PATH))
+      .willReturn(WireMock.aResponse().withFault(Fault.CONNECTION_RESET_BY_PEER)));
   }
 
   /** How many lookups reached the server since the last reset. */
