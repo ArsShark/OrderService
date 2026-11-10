@@ -1,0 +1,15 @@
+# Profile "docker": the application runs in a container. PostgreSQL and the other services are
+# reached by the service names of the Compose network. Environment variables override every
+# default. Credentials (DB_USERNAME, DB_PASSWORD) have no defaults and are never stored in this
+# file.
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:postgres}:${DB_PORT:5432}/${DB_NAME:order_service_db}
+app:
+  security:
+    # The internal address of the Authentication Service in the Compose network: its service
+    # name, never the Gateway (the Gateway does not route the key set).
+    jwks-uri: ${AUTH_JWKS_URI:http://authentication-service:8081/.well-known/jwks.json}
+  user-service:
+    # The internal address of the User Service (never the API Gateway).
+    base-uri: ${USER_SERVICE_URI:http://user-service:8082}
