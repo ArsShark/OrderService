@@ -1,0 +1,62 @@
+# Order Service with its PostgreSQL.
+# Usage: copy .env.example to .env, set DB_USERNAME, DB_PASSWORD and INTERNAL_API_KEY, then run
+# "docker compose up --build". The other services are not part of this file: the Authentication
+# Service (8081) and the User Service (8082) are expected on the host, see the README.
+name: order-service
+
+services:
+  app:
+    build: .
+    image: order-service:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # The "docker" profile points the application to the host "postgres", which is the service
+      # name below. SERVER_PORT is not passed on purpose: it must stay 8083, the port that is
+      # published below.
+      SPRING_PROFILES_ACTIVE: docker
+      DB_NAME: ${DB_NAME:-order_service_db}
+      DB_USERNAME: ${DB_USERNAME:?DB_USERNAME is required, see .env.example}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required, see .env.example}
+      # The Order Service has no internal endpoints: it only SENDS this key (header X-Internal-Key)
+      # to the User Service when it looks up the owner of an order, so the value must be the same
+      # as in the User Service. The application does not start without it.
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:?INTERNAL_API_KEY is required, see .env.example}
+      # The access tokens are checked with the public key of the Authentication Service. The
+      # issuer must be the same as JWT_ISSUER of the Authentication Service.
+      JWT_ISSUER: ${JWT_ISSUER:-authentication-service}
+      # The internal addresses of the other services (never the Gateway). In a standalone Compose
+      # they run on the host, so the default is the host; the Compose of the whole system sets
+      # the service names.
+      AUTH_JWKS_URI: ${AUTH_JWKS_URI:-http://host.docker.internal:8081/.well-known/jwks.json}
+      USER_SERVICE_URI: ${USER_SERVICE_URI:-http://host.docker.internal:8082}
+    # host.docker.internal is the host of the machine (the Authentication Service and the User
+    # Service run there when this file is used alone).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8083:8083"
+    volumes:
+      - app-logs:/app/logs
+
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: ${DB_NAME:-order_service_db}
+      POSTGRES_USER: ${DB_USERNAME:?DB_USERNAME is required, see .env.example}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required, see .env.example}
+    volumes:
+      # PostgreSQL 18+ images keep the data directory under /var/lib/postgresql/<major>/docker.
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      # "-h 127.0.0.1" forces a TCP connection. Without it pg_isready also succeeds on the
+      # temporary server of the first start, which listens only on a Unix socket.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-data:
+  app-logs:
