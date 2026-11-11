@@ -1,12 +1,14 @@
 # Order Service
 
+[![CI](https://github.com/ArsShark/OrderService/actions/workflows/ci.yml/badge.svg)](https://github.com/ArsShark/OrderService/actions/workflows/ci.yml)
+
 Order management microservice of the course e-commerce application
 (Innowise Java Advanced). Part of a system with Authentication Service,
 API Gateway, User Service and Payment Service.
 
 > Work in progress: the database schema, the DAO layer, the service layer, the REST API with the
-> security and the tests are done (JACAG-12 to JACAG-16), the container setup is JACAG-17. The CI
-> pipeline (JACAG-18) and the Kafka consumer of payments (JACAG-24) come next.
+> security, the tests, the container setup and the CI pipeline are done (JACAG-12 to JACAG-18). The
+> Kafka consumer of payments (JACAG-24) comes next.
 
 ## Stack
 
@@ -15,6 +17,7 @@ API Gateway, User Service and Payment Service.
 - Log4j2 (SLF4J API in the code)
 - Bean Validation, MapStruct, Resilience4j (core module, circuit breaker)
 - JUnit 5, Mockito, Testcontainers, WireMock
+- Docker, GitHub Actions, SonarQube Cloud
 
 ## Requirements
 
@@ -338,3 +341,57 @@ Only the unit tests, to see what they cover:
 ```powershell
 .\mvnw test "-DexcludedGroups=integration"
 ```
+
+## CI pipeline
+
+The workflow `.github/workflows/ci.yml` (GitHub Actions) runs on every push, on pull requests into
+`main` and manually (Actions > CI > Run workflow).
+
+| Job      | Step            | What it does |
+|----------|-----------------|--------------|
+| `build`  | Build           | `./mvnw -DskipTests package` |
+| `build`  | Test            | all tests (unit and integration, Testcontainers) and the JaCoCo report |
+| `build`  | Code analysis   | SonarQube Cloud; only on pull requests into `main` and on pushes to `main`; the build waits for the quality gate and fails if it is not passed |
+| `build`  | Upload reports  | JUnit and JaCoCo reports as the artifact `reports` (kept 14 days) |
+| `docker` | Build and push  | builds the image from the `Dockerfile` on every run (after `build` succeeded); pushes it to GHCR only on pushes to `main` or on a manual run with `publish` ticked |
+
+The tests need no secrets and no environment variables: PostgreSQL runs in Testcontainers, the key
+set of the Authentication Service and the User Service are played inside the tests. The free plan
+of SonarQube Cloud analyses only `main` and pull requests into `main`, so pushes to other branches
+skip the analysis. The pipeline runs the same commands as a local build:
+
+```powershell
+.\mvnw -B -ntp -DskipTests package
+.\mvnw -B -ntp test
+```
+
+Published image (the package must be public to pull it without a login):
+
+```powershell
+docker pull ghcr.io/arsshark/orderservice:latest      # last build of main
+docker pull ghcr.io/arsshark/orderservice:sha-<short commit id>
+```
+
+It runs like the locally built image, see "Run with Docker".
+
+Repository settings used by the pipeline (Settings > Secrets and variables > Actions):
+
+| Name                   | Kind     | Purpose |
+|------------------------|----------|---------|
+| `SONAR_TOKEN`          | secret   | token of the SonarQube Cloud project |
+| `SONAR_ORGANIZATION`   | variable | SonarQube Cloud organization key |
+| `SONAR_PROJECT_KEY`    | variable | SonarQube Cloud project key |
+
+Pushing to GHCR uses the built-in `GITHUB_TOKEN`, no extra secret is needed. The `docker/*`
+actions are pinned to commit SHAs (a tag can be moved, and the job may write packages); the
+GitHub-owned `actions/*` stay on a major tag.
+
+### CI troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| The step "Code analysis" fails with an authorization error | `SONAR_TOKEN`, `SONAR_ORGANIZATION` or `SONAR_PROJECT_KEY` is missing or wrong, or Automatic Analysis is still switched on in the SonarQube Cloud project. |
+| The step "Code analysis" fails after the analysis | The quality gate failed. Open the link in the log, fix the issue or, for a rule that does not apply, set the status in SonarQube Cloud with a reason. |
+| A test step fails with `toomanyrequests` | Docker Hub limits the anonymous pulls of `postgres:18`. Re-run the job. |
+| `docker pull` of the image is denied | The package is private. Make it public in the package settings of the repository owner. |
+| The manual run has no `publish` box | The workflow file must be on `main` first. |

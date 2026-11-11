@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Push the Docker image to GHCR even from a branch other than main
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# A newer run of the same branch or pull request replaces the older one.
+# Runs on main are never cancelled.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v7
+        with:
+          # SonarQube needs the full history to find new code and blame information.
+          fetch-depth: 0
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build
+        run: ./mvnw -B -ntp -DskipTests package
+
+      # All tests, including the integration tests: Testcontainers starts PostgreSQL in Docker,
+      # which is available on GitHub-hosted runners. The tests need no secrets: the key set of the
+      # Authentication Service and the User Service are played by servers inside the tests, and
+      # the tests set the internal key themselves.
+      - name: Test
+        run: ./mvnw -B -ntp test
+
+      # The free plan of SonarQube Cloud analyses only main and pull requests into main,
+      # so the step is skipped on pushes to other branches. The organization and the project key
+      # are repository variables, the token is a repository secret (Settings > Secrets and variables).
+      # The build waits for the quality gate and fails if it is not passed
+      # (sonar.qualitygate.wait=true).
+      - name: Code analysis (SonarQube Cloud)
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+        run: >
+          ./mvnw -B -ntp org.sonarsource.scanner.maven:sonar-maven-plugin:5.6.0.6792:sonar
+          -Dsonar.host.url=https://sonarcloud.io
+          -Dsonar.organization="$SONAR_ORGANIZATION"
+          -Dsonar.projectKey="$SONAR_PROJECT_KEY"
+          -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+          -Dsonar.qualitygate.wait=true
+
+      - name: Upload test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: reports
+          path: |
+            target/surefire-reports/
+            target/site/jacoco/
+          if-no-files-found: warn
+          retention-days: 14
+
+  docker:
+    name: Docker image
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # The image is built on every run (this checks the Dockerfile) but pushed to GHCR
+      # only on pushes to main, or on a manual run with "publish" ticked.
+      PUBLISH: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish) }}
+    steps:
+      # The actions of the "docker" organization are pinned to a commit SHA, not to a tag: a tag can
+      # be moved, and these steps run with the GITHUB_TOKEN that may write packages. The comment
+      # names the release; a version is changed by replacing the SHA after checking the release.
+      # The GitHub-owned actions (actions/*) stay on a major tag.
+      - name: Check out the code
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # GHCR needs a lowercase image name; the action lowercases it.
+      # The tags are "sha-<short commit id>" and, on the default branch only, "latest".
+      - name: Image tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: ${{ env.PUBLISH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Keeps the package a single plain image, without extra attestation manifests.
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
