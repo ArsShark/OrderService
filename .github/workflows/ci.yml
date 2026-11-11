@@ -50,6 +50,25 @@ jobs:
       - name: Test
         run: ./mvnw -B -ntp test
 
+      # The free plan of SonarQube Cloud analyses only main and pull requests into main,
+      # so the step is skipped on pushes to other branches. The organization and the project key
+      # are repository variables, the token is a repository secret (Settings > Secrets and variables).
+      # The build waits for the quality gate and fails if it is not passed
+      # (sonar.qualitygate.wait=true).
+      - name: Code analysis (SonarQube Cloud)
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+        run: >
+          ./mvnw -B -ntp org.sonarsource.scanner.maven:sonar-maven-plugin:5.6.0.6792:sonar
+          -Dsonar.host.url=https://sonarcloud.io
+          -Dsonar.organization="$SONAR_ORGANIZATION"
+          -Dsonar.projectKey="$SONAR_PROJECT_KEY"
+          -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+          -Dsonar.qualitygate.wait=true
+
       - name: Upload test and coverage reports
         if: always()
         uses: actions/upload-artifact@v7
