@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Push the Docker image to GHCR even from a branch other than main
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# A newer run of the same branch or pull request replaces the older one.
+# Runs on main are never cancelled.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v7
+        with:
+          # SonarQube needs the full history to find new code and blame information.
+          fetch-depth: 0
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build
+        run: ./mvnw -B -ntp -DskipTests package
+
+      # All tests, including the integration tests: Testcontainers starts PostgreSQL in Docker,
+      # which is available on GitHub-hosted runners. The tests need no secrets: the key set of the
+      # Authentication Service and the User Service are played by servers inside the tests, and
+      # the tests set the internal key themselves.
+      - name: Test
+        run: ./mvnw -B -ntp test
+
+      - name: Upload test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: reports
+          path: |
+            target/surefire-reports/
+            target/site/jacoco/
+          if-no-files-found: warn
+          retention-days: 14
