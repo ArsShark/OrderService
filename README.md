@@ -4,8 +4,9 @@ Order management microservice of the course e-commerce application
 (Innowise Java Advanced). Part of a system with Authentication Service,
 API Gateway, User Service and Payment Service.
 
-> Work in progress: the database schema, the entities, the DAO layer and the service layer are
-> done (JACAG-12, JACAG-13, JACAG-14). The controllers and the security come next (JACAG-15).
+> Work in progress: the database schema, the DAO layer, the service layer, the REST API with the
+> security and the tests are done (JACAG-12 to JACAG-16), the container setup is JACAG-17. The CI
+> pipeline (JACAG-18) and the Kafka consumer of payments (JACAG-24) come next.
 
 ## Stack
 
@@ -18,12 +19,13 @@ API Gateway, User Service and Payment Service.
 ## Requirements
 
 - JDK 21
-- Docker (the tests and the local PostgreSQL)
+- Docker (the tests, the local PostgreSQL and the container setup)
 - Maven Wrapper is included in the project
 
 ## Configuration
 
-The profile `local` is the default. Environment variables override every default.
+The profile `local` is the default (`spring.profiles.default`); the container sets
+`SPRING_PROFILES_ACTIVE=docker`. Environment variables override every default.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -45,6 +47,19 @@ before the rate is judged, 50 percent failures to open, 10 seconds open, 3 probe
 are `app.user-service.connect-timeout` (2 s) and `app.user-service.read-timeout` (5 s).
 
 Credentials are never stored in the repository.
+
+### Spring profiles
+
+| Setting | `local` (default) | `docker` |
+|---|---|---|
+| database | `localhost:5435` | `postgres:5432` (the service name of the Compose file) |
+| `AUTH_JWKS_URI` | `http://localhost:8081/.well-known/jwks.json` | `http://authentication-service:8081/.well-known/jwks.json` |
+| `USER_SERVICE_URI` | `http://localhost:8082` | `http://user-service:8082` |
+
+The profile files hold only these connection defaults. The base `application.yml` has no URL,
+host or port, and no profile file holds a credential (`SpringProfilesTest` checks it). The
+defaults of the `docker` profile are the service names of the Compose file of the whole system;
+the Compose file of this repository overrides the two addresses, see below.
 
 ## Run locally
 
@@ -69,6 +84,60 @@ Every endpoint needs an access token, so the Authentication Service (port 8081) 
 running: the service reads its key set on the first request with a token. The orders also need
 the User Service (port 8082) to show the owner; without it an order is still returned, with
 `userInfoAvailable = false`.
+
+## Run with Docker
+
+`docker-compose.yml` starts the application and its own PostgreSQL 18. Only port 8083 is
+published; the database port is not.
+
+```powershell
+Copy-Item .env.example .env
+# edit .env: set DB_PASSWORD and INTERNAL_API_KEY
+docker compose up --build
+```
+
+`.env` is ignored by Git and by the Docker build context; `.env.example` has placeholders. The
+required values use the form `${VAR:?message}`, so a missing `DB_USERNAME`, `DB_PASSWORD` or
+`INTERNAL_API_KEY` stops `docker compose` with a clear message instead of starting a broken
+service. Variables set in the shell win over `.env`.
+
+| Variable | Default in the Compose file | Meaning |
+|---|---|---|
+| `DB_USERNAME`, `DB_PASSWORD` | none, required | user and password of the database (the same values create the PostgreSQL user) |
+| `DB_NAME` | `order_service_db` | database name |
+| `INTERNAL_API_KEY` | none, required | the key that the service sends to the User Service (header `X-Internal-Key`); the same value as in the User Service. The Order Service has no internal endpoints of its own |
+| `JWT_ISSUER` | `authentication-service` | the issuer of the tokens; the same value as in the Authentication Service |
+| `AUTH_JWKS_URI` | `http://host.docker.internal:8081/.well-known/jwks.json` | the key set of the Authentication Service |
+| `USER_SERVICE_URI` | `http://host.docker.internal:8082` | the User Service |
+
+This file does not contain the other services. The Authentication Service (8081) and the User
+Service (8082) are expected on the host, for example started with their own Compose files, and
+the container reaches them through `host.docker.internal` (`extra_hosts: host-gateway`). The
+service starts without them: the key set is read on the first request with a token, the User
+Service on the first order. The whole system (gateway, all services, all databases) is started
+from the [Infrastructure](https://github.com/ArsShark/Infrastructure) repository.
+
+The image is built in two stages (JDK with the Maven Wrapper and a BuildKit cache, then a JRE
+image). The tests are not run during the image build, CI runs them. The application runs as the
+non-root user `app`, writes its log to `/app/logs/order-service.log` (the volume `app-logs`) and
+receives SIGTERM as PID 1, so `docker stop` shuts Spring down gracefully. No secret is in the
+image: the database password and the internal key are read only when the application starts.
+
+```powershell
+docker build -t order-service:dev .
+docker compose down        # stops the containers and keeps the data
+docker compose down -v     # also deletes the database volume
+```
+
+### Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `DB_PASSWORD is required, see .env.example` | `.env` is missing or the value is empty. Copy `.env.example` to `.env`. |
+| Authentication errors of PostgreSQL after changing `DB_PASSWORD` | PostgreSQL reads the password only when the volume is empty. `docker compose down -v` deletes the data and starts again. |
+| Every request with a token is 401 and the log has `A token could not be verified` | The container cannot reach the key set. Check that the Authentication Service answers on `localhost:8081`, that `AUTH_JWKS_URI` is right, that `JWT_ISSUER` equals the one of the Authentication Service, and that the Windows firewall does not block the Java process of the Authentication Service. |
+| Orders come back with `userInfoAvailable = false` | The User Service is not reachable at `USER_SERVICE_URI`, or its `INTERNAL_API_KEY` differs (the log says `refused the internal key`). |
+| `port is already allocated` for 8083 | The service is running from the IDE. Stop it. |
 
 ## Database schema
 
@@ -231,6 +300,8 @@ the application verifies them the way it does in production. The web layer is te
 `@WebMvcTest` and the real security chain, the access rules for every endpoint and caller with
 `AccessMatrixIntegrationTest`, and a key set that is down or stops with `KeySetNotAvailableTest`
 and `KeySetOutageTest`.
+
+The profile files are read by `SpringProfilesTest` without starting Spring.
 
 The User Service is played by WireMock. Tests of the client use a generous read timeout (10 s)
 and a short one only in the test that proves the timeout; the breaker tests switch its state with
