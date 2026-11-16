@@ -47,7 +47,16 @@ class SpringProfilesTest {
         () -> assertEquals("http://authentication-service:8081/.well-known/jwks.json",
             resolver.getProperty("app.security.jwks-uri")),
         () -> assertEquals("http://user-service:8082",
-            resolver.getProperty("app.user-service.base-uri")));
+            resolver.getProperty("app.user-service.base-uri")),
+        () -> assertEquals("kafka:19092",
+            resolver.getProperty("spring.kafka.bootstrap-servers")));
+  }
+
+  @Test
+  void localDefaultIsTheBrokerThatTheComposeFileOfPaymentPublishesOnTheHost() {
+    PropertySourcesPropertyResolver resolver = resolverFor(LOCAL_FILE, Map.of());
+
+    assertEquals("localhost:9092", resolver.getProperty("spring.kafka.bootstrap-servers"));
   }
 
   @Test
@@ -57,7 +66,8 @@ class SpringProfilesTest {
         "DB_PORT", "6543",
         "DB_NAME", "orders",
         "AUTH_JWKS_URI", "http://auth.internal:9001/jwks",
-        "USER_SERVICE_URI", "http://users.internal:9002"));
+        "USER_SERVICE_URI", "http://users.internal:9002",
+        "KAFKA_BOOTSTRAP_SERVERS", "broker.internal:9003"));
 
     assertAll(
         () -> assertEquals("jdbc:postgresql://db.internal:6543/orders",
@@ -65,7 +75,9 @@ class SpringProfilesTest {
         () -> assertEquals("http://auth.internal:9001/jwks",
             resolver.getProperty("app.security.jwks-uri")),
         () -> assertEquals("http://users.internal:9002",
-            resolver.getProperty("app.user-service.base-uri")));
+            resolver.getProperty("app.user-service.base-uri")),
+        () -> assertEquals("broker.internal:9003",
+            resolver.getProperty("spring.kafka.bootstrap-servers")));
   }
 
   @Test
@@ -89,6 +101,11 @@ class SpringProfilesTest {
   @Test
   void theBaseConfigurationHasNoDatasourceUrl() {
     assertFalse(keysOf(BASE_FILE).contains("spring.datasource.url"));
+  }
+
+  @Test
+  void theBaseConfigurationHasNoBrokerAddress() {
+    assertFalse(keysOf(BASE_FILE).contains("spring.kafka.bootstrap-servers"));
   }
 
   @ParameterizedTest
