@@ -1,5 +1,6 @@
 package com.innowise.orderservice.service;
 
+import com.innowise.orderservice.dto.event.PaymentEvent;
 import com.innowise.orderservice.dto.request.OrderItemRequest;
 import com.innowise.orderservice.dto.request.OrderRequest;
 import com.innowise.orderservice.dto.response.OrderResponse;
@@ -7,6 +8,7 @@ import com.innowise.orderservice.entity.Item;
 import com.innowise.orderservice.entity.Order;
 import com.innowise.orderservice.entity.OrderItem;
 import com.innowise.orderservice.entity.OrderStatus;
+import com.innowise.orderservice.exception.InvalidPaymentEventException;
 import com.innowise.orderservice.exception.ItemNotAvailableException;
 import com.innowise.orderservice.exception.OrderNotDeletableException;
 import com.innowise.orderservice.exception.OrderNotEditableException;
@@ -15,6 +17,7 @@ import com.innowise.orderservice.mapper.OrderMapper;
 import com.innowise.orderservice.repository.ItemRepository;
 import com.innowise.orderservice.repository.OrderRepository;
 import com.innowise.orderservice.repository.specification.OrderSpecifications;
+import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -181,6 +184,116 @@ public class OrderService {
     order.markDeleted();
     orderRepository.saveAndFlush(order);
     LOGGER.info("Deleted order with id {}", id);
+  }
+
+  /**
+   * Applies the outcome of a payment, which arrives as an event from the Payment Service, to the
+   * order that it pays.
+   *
+   * <p>The order is loaded with the row lock, like in every other write, so an event and a
+   * cancel (or an update of the lines) that arrive together wait for each other: the one that
+   * gets the lock first wins and the other one sees its result. The method is idempotent, because
+   * Kafka delivers an event at least once: the same event again changes nothing.
+   *
+   * <p>An event that does not belong to the order is not applied and is not an error: a missing
+   * or deleted order, another payer, another amount. It is logged at WARN and the result tells
+   * which case it was; a retry could not change anything.
+   *
+   * <pre>
+   * order status     SUCCESS                         FAILED
+   * PENDING          PAID                            PAYMENT_FAILED
+   * PAYMENT_FAILED   PAID                            no change (repeated)
+   * PAID             no change (repeated)            ignored (late)
+   * CANCELLED        no change, WARN (no refund)     ignored (late)
+   * </pre>
+   *
+   * @param event the event {@code CREATE_PAYMENT}
+   * @return what was done with the event
+   * @throws InvalidPaymentEventException if the order id, the payer, the status or the amount of
+   *   the event is missing or the amount is not a number (nothing is read from the database then)
+   */
+  @Transactional
+  public PaymentEventResult applyPaymentResult(PaymentEvent event) {
+    if (event.orderId() == null || event.userId() == null || event.status() == null
+      || event.amount() == null) {
+      throw new InvalidPaymentEventException(
+        "The payment event has no order id, payer, status or amount");
+    }
+    BigDecimal amount = parseAmount(event.amount());
+
+    Order order = orderRepository.findByIdForUpdate(event.orderId()).orElse(null);
+    if (order == null) {
+      LOGGER.warn("Payment {} refers to order {} that does not exist or is deleted",
+        event.paymentId(), event.orderId());
+      return PaymentEventResult.ORDER_NOT_FOUND;
+    }
+    if (!order.getUserId().equals(event.userId())) {
+      LOGGER.warn("Payment {} was made by user {}, who does not own order {}",
+        event.paymentId(), event.userId(), event.orderId());
+      return PaymentEventResult.OWNER_MISMATCH;
+    }
+    // compareTo: 24 and 24.00 are the same amount, equals would tell them apart.
+    if (order.getTotalPrice().compareTo(amount) != 0) {
+      LOGGER.warn("Payment {} of order {} has the amount {}, the order costs {}",
+        event.paymentId(), event.orderId(), amount.toPlainString(),
+        order.getTotalPrice().toPlainString());
+      return PaymentEventResult.AMOUNT_MISMATCH;
+    }
+    return switch (event.status()) {
+      case SUCCESS -> applySuccess(order, event.paymentId());
+      case FAILED -> applyFailure(order, event.paymentId());
+    };
+  }
+
+  private PaymentEventResult applySuccess(Order order, String paymentId) {
+    return switch (order.getStatus()) {
+      case PENDING, PAYMENT_FAILED -> {
+        order.markPaid();
+        orderRepository.saveAndFlush(order);
+        LOGGER.info("Order {} is paid by payment {}", order.getId(), paymentId);
+        yield PaymentEventResult.APPLIED;
+      }
+      case PAID -> {
+        LOGGER.info("Order {} is paid already, payment {} again changes nothing", order.getId(),
+          paymentId);
+        yield PaymentEventResult.ALREADY_APPLIED;
+      }
+      case CANCELLED -> {
+        LOGGER.warn("Payment {} succeeded but order {} is cancelled and stays so (no refund)",
+          paymentId, order.getId());
+        yield PaymentEventResult.ORDER_CANCELLED;
+      }
+    };
+  }
+
+  private PaymentEventResult applyFailure(Order order, String paymentId) {
+    return switch (order.getStatus()) {
+      case PENDING -> {
+        order.markPaymentFailed();
+        orderRepository.saveAndFlush(order);
+        LOGGER.info("Payment {} of order {} failed", paymentId, order.getId());
+        yield PaymentEventResult.APPLIED;
+      }
+      case PAYMENT_FAILED -> {
+        LOGGER.info("Order {} is marked as failed already, payment {} again changes nothing",
+          order.getId(), paymentId);
+        yield PaymentEventResult.ALREADY_APPLIED;
+      }
+      case PAID, CANCELLED -> {
+        LOGGER.info("Payment {} failed after order {} was {}; ignored", paymentId, order.getId(),
+          order.getStatus());
+        yield PaymentEventResult.IGNORED;
+      }
+    };
+  }
+
+  /** Reads the amount of an event; the text of a wrong value is never put into the message. */
+  private static BigDecimal parseAmount(String text) {
+    try {
+      return new BigDecimal(text.strip());
+    } catch (NumberFormatException e) {
+      throw new InvalidPaymentEventException("The amount of the payment event is not a number");
+    }
   }
 
   private Order findForUpdate(Long id, Caller caller) {
