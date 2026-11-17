@@ -191,6 +191,12 @@
       <artifactId>testcontainers-postgresql</artifactId>
       <scope>test</scope>
     </dependency>
+    <dependency>
+      <!-- The Kafka container (org.testcontainers.kafka.KafkaContainer, image apache/kafka). -->
+      <groupId>org.testcontainers</groupId>
+      <artifactId>testcontainers-kafka</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>

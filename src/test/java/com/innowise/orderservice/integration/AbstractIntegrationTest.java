@@ -12,6 +12,7 @@ import java.util.Objects;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
@@ -24,13 +25,20 @@ import org.springframework.test.web.servlet.ResultMatcher;
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers;
 
 /**
- * Base class of the integration tests: the whole application on a real PostgreSQL container.
+ * Base class of the integration tests: the whole application on a real PostgreSQL container and
+ * a real Kafka broker.
  *
  * <p>All subclasses share one Spring context and with it one container, because the container is
  * a bean of the context and a second context would start a second one. So subclasses must not
  * change the context: no {@code @MockitoBean}, {@code @TestPropertySource},
  * {@code @DirtiesContext} or extra {@code @Import}. Properties that every test needs belong to
  * this class.
+ *
+ * <p>The Kafka listener of the application does NOT start with the context
+ * ({@code spring.kafka.listener.auto-startup=false}). A running listener would apply payment
+ * events of one test to the orders of the next one, because every test starts the identity
+ * counters again and so reuses the ids. A test of the consumer starts the listener itself and
+ * stops it when its class is done (see {@code KafkaSupport}).
  *
  * <p>Hibernate statistics are on, so a test can count the SQL statements of an operation. The
  * User Service is played by {@link UserServiceStub}; its address is set below, and the internal
@@ -51,7 +59,8 @@ import org.springframework.test.web.servlet.result.MockMvcResultMatchers;
 @Tag("integration")
 @SpringBootTest(properties = {
   "spring.jpa.properties.hibernate.generate_statistics=true",
-  "app.internal.api-key=test-internal-key"})
+  "app.internal.api-key=test-internal-key",
+  "spring.kafka.listener.auto-startup=false"})
 @AutoConfigureMockMvc
 @Import({TestcontainersConfiguration.class, TestClockConfiguration.class,
   TestSecurityConfiguration.class})
@@ -86,6 +95,10 @@ abstract class AbstractIntegrationTest {
 
   @Autowired
   protected MockMvc mockMvc;
+
+  /** The address of the Kafka container, for tests that talk to the broker themselves. */
+  @Value("${spring.kafka.bootstrap-servers}")
+  protected String kafkaBootstrapServers;
 
   @Autowired
   protected JdbcTemplate jdbcTemplate;
