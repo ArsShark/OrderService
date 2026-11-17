@@ -24,6 +24,35 @@ spring:
       pageable:
         # Spring caps a larger "size" silently; the API promises at most 100 per page.
         max-page-size: 100
+  kafka:
+    # The address of the broker is defined per profile (application-local.yml and -docker.yml).
+    consumer:
+      # All instances of this service form one group: a partition is read by one of them.
+      group-id: order-service
+      # Where a group starts when it has no committed position yet (the first start): at the
+      # beginning, so a payment that was made before this service ran is not lost.
+      auto-offset-reset: earliest
+      # The container commits the position itself, after every record (see ack-mode).
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # ErrorHandlingDeserializer turns a record that cannot be read into a failure that the
+      # error handler sees, instead of an endless loop on the same record. The class that does
+      # the reading is the delegate.
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        "[spring.deserializer.value.delegate.class]": org.springframework.kafka.support.serializer.JacksonJsonDeserializer
+        # The events carry no Java type: this service reads them as its own copy of the event.
+        "[spring.json.use.type.headers]": false
+        "[spring.json.value.default.type]": com.innowise.orderservice.dto.event.PaymentEvent
+        "[spring.json.trusted.packages]": com.innowise.orderservice.dto.event
+    listener:
+      # The position of a record is committed after the listener has handled it.
+      ack-mode: record
+      # One thread reads all three partitions. Events of one order stay in order anyway.
+      concurrency: 1
+      # The topic payment-events is created by the Payment Service. If this service starts
+      # first, it waits for the topic instead of stopping.
+      missing-topics-fatal: false
 server:
   port: ${SERVER_PORT:8083}
   # The services are reachable only inside the network, so they may trust the X-Forwarded-*
@@ -41,3 +70,5 @@ logging:
   level:
     # At WARN Hibernate logs the DETAIL of a failed statement, which holds real emails.
     org.hibernate.orm.jdbc.error: ERROR
+    # The Kafka client logs every configuration value at INFO, again for every client.
+    org.apache.kafka: WARN
