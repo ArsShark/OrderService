@@ -1,7 +1,9 @@
-# Order Service with its PostgreSQL.
+# Order Service with its PostgreSQL and a Kafka broker.
 # Usage: copy .env.example to .env, set DB_USERNAME, DB_PASSWORD and INTERNAL_API_KEY, then run
 # "docker compose up --build". The other services are not part of this file: the Authentication
-# Service (8081) and the User Service (8082) are expected on the host, see the README.
+# Service (8081) and the User Service (8082) are expected on the host, see the README. The Payment
+# Service is not part of it either, so nothing writes payment events here; the broker is here
+# because the application connects to it when it starts (see the README).
 name: order-service
 
 services:
@@ -11,10 +13,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
     environment:
-      # The "docker" profile points the application to the host "postgres", which is the service
-      # name below. SERVER_PORT is not passed on purpose: it must stay 8083, the port that is
-      # published below.
+      # The "docker" profile points the application to the hosts "postgres" and "kafka", which are
+      # the service names below. SERVER_PORT is not passed on purpose: it must stay 8083, the port
+      # that is published below.
       SPRING_PROFILES_ACTIVE: docker
       DB_NAME: ${DB_NAME:-order_service_db}
       DB_USERNAME: ${DB_USERNAME:?DB_USERNAME is required, see .env.example}
@@ -56,6 +60,42 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  kafka:
+    # One broker in KRaft mode: this single process is both the broker and the controller. It is
+    # the same image and settings as in the Compose file of the Payment Service, without the
+    # listener for the host and without a published port: only the application in this project
+    # uses it. The image reads every KAFKA_* variable into its configuration and a variable
+    # replaces the default, so the set below is complete on purpose.
+    image: apache/kafka:4.2.0
+    environment:
+      KAFKA_NODE_ID: 1
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: CONTROLLER://:9093,INTERNAL://:19092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      # One broker cannot keep more than one copy of anything, so the internal topics of Kafka
+      # (consumer offsets, transactions) must have one replica, or the broker does not start.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # A topic is created on purpose (by an application), never by a typo in its name.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+    # No volume: the data of a development broker is disposable.
+    healthcheck:
+      # The string form of "test" runs in the shell of the container. The tool exits with an
+      # error while the broker does not answer.
+      test: /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:19092
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
 
 volumes:
   postgres-data:
