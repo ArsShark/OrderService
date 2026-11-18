@@ -50,8 +50,9 @@ spring:
       ack-mode: record
       # One thread reads all three partitions. Events of one order stay in order anyway.
       concurrency: 1
-      # The topic payment-events is created by the Payment Service. If this service starts
-      # first, it waits for the topic instead of stopping.
+      # Both services declare payment-events. If the broker was not reachable when this service
+      # started, the topic is missing until the next start: the listener waits for it instead of
+      # stopping.
       missing-topics-fatal: false
 server:
   port: ${SERVER_PORT:8083}

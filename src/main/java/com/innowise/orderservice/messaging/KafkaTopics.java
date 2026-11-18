@@ -7,7 +7,10 @@ package com.innowise.orderservice.messaging;
  */
 public final class KafkaTopics {
 
-  /** The topic of the payment events. The Payment Service writes it and owns it. */
+  /**
+   * The topic of the payment events. The Payment Service writes it and owns it; this service
+   * declares it too (see {@code KafkaTopicConfig}).
+   */
   public static final String PAYMENT_EVENTS = "payment-events";
 
   /**

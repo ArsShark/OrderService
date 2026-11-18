@@ -1,11 +1,8 @@
 package com.innowise.orderservice;
 
-import com.innowise.orderservice.messaging.KafkaTopics;
-import org.apache.kafka.clients.admin.NewTopic;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
-import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.test.context.DynamicPropertyRegistrar;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -34,7 +31,7 @@ public class TestcontainersConfiguration {
   /**
    * A single Kafka broker in KRaft mode, the image of the Compose file of the Payment Service.
    * Unlike that Compose file the container creates a topic when something writes to it; the
-   * tests declare the topic of the Payment Service as a bean, so it has its real three partitions.
+   * application declares the topics it needs itself, so they have their real three partitions.
    *
    * @return the container
    */
@@ -53,20 +50,5 @@ public class TestcontainersConfiguration {
   DynamicPropertyRegistrar kafkaProperties(KafkaContainer kafkaContainer) {
     return registry -> registry.add("spring.kafka.bootstrap-servers",
       kafkaContainer::getBootstrapServers);
-  }
-
-  /**
-   * The topic of the Payment Service, which is its owner and declares it there. The tests play
-   * the Payment Service, so they declare the same topic with the same three partitions; without
-   * it the container would create the topic with one partition at the first write.
-   *
-   * @return the declaration of the topic
-   */
-  @Bean
-  NewTopic paymentEventsTopic() {
-    return TopicBuilder.name(KafkaTopics.PAYMENT_EVENTS)
-      .partitions(KafkaTopics.PARTITIONS)
-      .replicas(KafkaTopics.REPLICAS)
-      .build();
   }
 }
