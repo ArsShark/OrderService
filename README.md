@@ -123,9 +123,9 @@ service. Variables set in the shell win over `.env`.
 
 The application connects to the broker when it starts, so the broker is in this file and the
 application waits until it is healthy. The Payment Service is not part of this file, so nothing
-writes payment events here; use it to see that the application starts. The topic
-`payment-events` is created by the Payment Service. Kafka has no volume: `docker compose down`
-removes its data.
+writes payment events here; use it to see that the application starts. The application declares
+the topics `payment-events` and `payment-events.DLT` itself, so the broker has them after the
+start. Kafka has no volume: `docker compose down` removes its data.
 
 This file does not contain the other services. The Authentication Service (8081) and the User
 Service (8082) are expected on the host, for example started with their own Compose files, and
@@ -156,7 +156,7 @@ docker compose down -v     # also deletes the database volume
 | Orders come back with `userInfoAvailable = false` | The User Service is not reachable at `USER_SERVICE_URI`, or its `INTERNAL_API_KEY` differs (the log says `refused the internal key`). |
 | `port is already allocated` for 8083 | The service is running from the IDE. Stop it. |
 | `Connection to node -1 ... could not be established` in the log | Kafka is not running at `KAFKA_BOOTSTRAP_SERVERS`. Start the broker of the Payment Service (local run) or use the Compose file (the broker is in it). The REST API works meanwhile. |
-| `The topic payment-events ... is not present` warnings | The Payment Service has not created the topic yet (it is its owner). Start it once; the consumer then continues by itself. |
+| `UNKNOWN_TOPIC_OR_PARTITION` for `payment-events` in a warning every second | The topic does not exist: the broker was not reachable when the application started (so it could not create the topics) or it was recreated without a volume. Restart the application. |
 
 ## Database schema
 
@@ -347,8 +347,9 @@ as the original).
 start reads the payments that were made before; the position is committed after every record
 (`ack-mode: record`); one listener thread reads all partitions; JSON is read by
 `ErrorHandlingDeserializer` with `JacksonJsonDeserializer`, without Java type headers (this
-service has its own `PaymentEvent`). The service waits for the topic if the Payment Service has
-not created it yet.
+service has its own `PaymentEvent`). The Payment Service is the owner of `payment-events` and
+declares it, and this service declares it too with the same shape (three partitions), so it does
+not matter which of the two starts first.
 
 How to look at it by hand (the Compose file of the Payment Service runs the broker; the
 application and PostgreSQL run as usual). Write an event for an order that exists, with its
