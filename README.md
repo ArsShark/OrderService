@@ -7,14 +7,15 @@ Order management microservice of the course e-commerce application
 API Gateway, User Service and Payment Service.
 
 > Work in progress: the database schema, the DAO layer, the service layer, the REST API with the
-> security, the tests, the container setup and the CI pipeline are done (JACAG-12 to JACAG-18). The
-> Kafka consumer of payments (JACAG-24) comes next.
+> security, the tests, the container setup and the CI pipeline are done (JACAG-12 to JACAG-18),
+> and so is the Kafka consumer of the payment events (JACAG-24).
 
 ## Stack
 
 - Java 21, Spring Boot 4.1.1 (Spring MVC, Spring Data JPA)
 - PostgreSQL 18 with Liquibase migrations
 - Log4j2 (SLF4J API in the code)
+- Apache Kafka 4 (KRaft, Spring for Apache Kafka): the consumer of the payment events, JSON
 - Bean Validation, MapStruct, Resilience4j (core module, circuit breaker)
 - JUnit 5, Mockito, Testcontainers, WireMock
 - Docker, GitHub Actions, SonarQube Cloud
@@ -22,7 +23,7 @@ API Gateway, User Service and Payment Service.
 ## Requirements
 
 - JDK 21
-- Docker (the tests, the local PostgreSQL and the container setup)
+- Docker (the tests, the local PostgreSQL, the local Kafka and the container setup)
 - Maven Wrapper is included in the project
 
 ## Configuration
@@ -42,6 +43,7 @@ The profile `local` is the default (`spring.profiles.default`); the container se
 | `INTERNAL_API_KEY` | none, required | shared key of the internal endpoints of the other services; an empty value stops the startup |
 | `USER_SERVICE_URI` | `http://localhost:8082` | internal address of the User Service (never the API Gateway) |
 | `AUTH_JWKS_URI` | `http://localhost:8081/.well-known/jwks.json` | internal address of the key set of the Authentication Service (never the API Gateway) |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | address of the Kafka broker |
 | `JWT_ISSUER` | `authentication-service` | the issuer that a token must have; the same value as in the Authentication Service |
 
 The circuit breaker of the calls to the User Service is configured with
@@ -58,6 +60,7 @@ Credentials are never stored in the repository.
 | database | `localhost:5435` | `postgres:5432` (the service name of the Compose file) |
 | `AUTH_JWKS_URI` | `http://localhost:8081/.well-known/jwks.json` | `http://authentication-service:8081/.well-known/jwks.json` |
 | `USER_SERVICE_URI` | `http://localhost:8082` | `http://user-service:8082` |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | `kafka:19092` |
 
 The profile files hold only these connection defaults. The base `application.yml` has no URL,
 host or port, and no profile file holds a credential (`SpringProfilesTest` checks it). The
@@ -83,6 +86,11 @@ $env:INTERNAL_API_KEY = "<the same key as in the User Service>"
 .\mvnw spring-boot:run
 ```
 
+The application also connects to Kafka at `localhost:9092`. The Compose file of the
+[Payment Service](https://github.com/ArsShark/PaymentService) starts a broker there
+(`docker compose up -d kafka`). Without a broker the application still starts and the REST API
+works, but the log shows connection warnings and no payment event is read.
+
 Every endpoint needs an access token, so the Authentication Service (port 8081) must be
 running: the service reads its key set on the first request with a token. The orders also need
 the User Service (port 8082) to show the owner; without it an order is still returned, with
@@ -90,8 +98,8 @@ the User Service (port 8082) to show the owner; without it an order is still ret
 
 ## Run with Docker
 
-`docker-compose.yml` starts the application and its own PostgreSQL 18. Only port 8083 is
-published; the database port is not.
+`docker-compose.yml` starts the application, its own PostgreSQL 18 and a Kafka broker. Only port
+8083 is published; the database and Kafka ports are not.
 
 ```powershell
 Copy-Item .env.example .env
@@ -112,6 +120,12 @@ service. Variables set in the shell win over `.env`.
 | `JWT_ISSUER` | `authentication-service` | the issuer of the tokens; the same value as in the Authentication Service |
 | `AUTH_JWKS_URI` | `http://host.docker.internal:8081/.well-known/jwks.json` | the key set of the Authentication Service |
 | `USER_SERVICE_URI` | `http://host.docker.internal:8082` | the User Service |
+
+The application connects to the broker when it starts, so the broker is in this file and the
+application waits until it is healthy. The Payment Service is not part of this file, so nothing
+writes payment events here; use it to see that the application starts. The application declares
+the topics `payment-events` and `payment-events.DLT` itself, so the broker has them after the
+start. Kafka has no volume: `docker compose down` removes its data.
 
 This file does not contain the other services. The Authentication Service (8081) and the User
 Service (8082) are expected on the host, for example started with their own Compose files, and
@@ -141,6 +155,8 @@ docker compose down -v     # also deletes the database volume
 | Every request with a token is 401 and the log has `A token could not be verified` | The container cannot reach the key set. Check that the Authentication Service answers on `localhost:8081`, that `AUTH_JWKS_URI` is right, that `JWT_ISSUER` equals the one of the Authentication Service, and that the Windows firewall does not block the Java process of the Authentication Service. |
 | Orders come back with `userInfoAvailable = false` | The User Service is not reachable at `USER_SERVICE_URI`, or its `INTERNAL_API_KEY` differs (the log says `refused the internal key`). |
 | `port is already allocated` for 8083 | The service is running from the IDE. Stop it. |
+| `Connection to node -1 ... could not be established` in the log | Kafka is not running at `KAFKA_BOOTSTRAP_SERVERS`. Start the broker of the Payment Service (local run) or use the Compose file (the broker is in it). The REST API works meanwhile. |
+| `UNKNOWN_TOPIC_OR_PARTITION` for `payment-events` in a warning every second | The topic does not exist: the broker was not reachable when the application started (so it could not create the topics) or it was recreated without a volume. Restart the application. |
 
 ## Database schema
 
@@ -267,6 +283,89 @@ The role comes from the claim `role` (only the exact `ADMIN` and `USER` count).
 - 401 and 403 have constant texts (`Authentication is required`, `Access is denied`); every kind
   of bad token gets the same answer. Tokens, emails and keys are never logged.
 
+## Payment events (Kafka)
+
+When a client pays an order in the Payment Service, that service saves the payment and writes the
+event `CREATE_PAYMENT` to the topic `payment-events`. This service reads it and moves the order
+to `PAID` or `PAYMENT_FAILED`.
+
+```
+Payment Service --(key = order id, JSON)--> [payment-events, 3 partitions] --> PaymentEventListener
+                                                                                     |
+                                                       OrderService.applyPaymentResult (transaction, row lock)
+                                                                                     |
+                                                  a record that cannot be applied --> [payment-events.DLT]
+```
+
+The event (the Payment Service pins the same JSON in its tests, `PaymentEventTest` here):
+
+```json
+{
+  "eventId": "4d1f8f3e-0c0b-3b52-9c7e-1f6a2d9b7a10",
+  "eventType": "CREATE_PAYMENT",
+  "paymentId": "65f0c0ffee0123456789abcd",
+  "orderId": 5,
+  "userId": 7,
+  "status": "SUCCESS",
+  "amount": "24.00",
+  "occurredAt": "2026-11-16T10:00:00.123Z"
+}
+```
+
+**What an event does to an order.** The order is loaded with the row lock, so an event and a
+cancel (or an update of the lines) that arrive together wait for each other. Then the event is
+checked against the order: the payer must be the owner and the amount must equal the total (as a
+number: `24` equals `24.00`). Then:
+
+| Order status | `SUCCESS` | `FAILED` |
+|---|---|---|
+| `PENDING` | `PAID` | `PAYMENT_FAILED` |
+| `PAYMENT_FAILED` | `PAID` | no change (repeated) |
+| `PAID` | no change (repeated) | ignored (late) |
+| `CANCELLED` | no change, WARN: the money is not returned | ignored (late) |
+
+Kafka delivers an event at least once, so the same event can come twice; the table makes that
+harmless (it changes nothing, not even the version of the row). Events of one order stay in order,
+because the key is the order id and one key always goes to one partition.
+
+**Records that are not applied.**
+
+| Record | What happens |
+|---|---|
+| another payer, another amount, no such order (or a deleted one), no value, another event type | WARN in the log, the record is committed, the order is not changed |
+| not JSON, a `status` that does not exist | not retried; goes to `payment-events.DLT` as it came |
+| JSON without an order id, payer, status or amount, or an amount that is not a number | not retried; goes to `payment-events.DLT` |
+| any other exception (the database is down, a lock times out) | retried four times after 0.5, 1, 2 and 4 seconds, then goes to `payment-events.DLT` |
+
+A dead letter record has headers that tell where it came from and why it failed
+(`kafka_dlt-original-topic`, `kafka_dlt-exception-fqcn`, ...). Nobody reads the dead letter topic
+for now: the records stay there for a person to look at. The topic is declared by this service
+(three partitions, like `payment-events`: a dead letter record goes to the same partition number
+as the original).
+
+**Settings** (`application.yml`): group `order-service`; `auto.offset.reset=earliest`, so a first
+start reads the payments that were made before; the position is committed after every record
+(`ack-mode: record`); one listener thread reads all partitions; JSON is read by
+`ErrorHandlingDeserializer` with `JacksonJsonDeserializer`, without Java type headers (this
+service has its own `PaymentEvent`). The Payment Service is the owner of `payment-events` and
+declares it, and this service declares it too with the same shape (three partitions), so it does
+not matter which of the two starts first.
+
+How to look at it by hand (the Compose file of the Payment Service runs the broker; the
+application and PostgreSQL run as usual). Write an event for an order that exists, with its
+owner and its total, and look at the order:
+
+```powershell
+docker compose -f <path to PaymentService>\docker-compose.yml exec kafka /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --topic payment-events --reader-property parse.key=true --reader-property key.separator="|"
+# type one line: <order id>|<the JSON of the event on ONE line>, then Ctrl+C
+```
+
+Read the dead letters:
+
+```powershell
+docker compose -f <path to PaymentService>\docker-compose.yml exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic payment-events.DLT --from-beginning --formatter-property print.key=true --formatter-property print.headers=true
+```
+
 ## Known limits
 
 - A `POST` whose answer is lost and is sent again creates a second order: there is no
@@ -286,7 +385,16 @@ The role comes from the claim `role` (only the exact `ADMIN` and `USER` count).
   of a profile, a new order stores the old one and the owner lookup finds nobody.
 - A 401 has no `WWW-Authenticate` header (RFC 9110 asks for one), as in the other services.
 - The payment of an order is started by the client in the Payment Service, which does not check
-  the amount against the order (JACAG-24).
+  the order. This service checks the event afterwards: an event of another payer or with another
+  amount is not applied. So a payment that does not match its order stays in the Payment Service
+  and the order stays `PENDING`; an admin who pays an order of somebody else with his own profile
+  is such a case.
+- An event that the Payment Service could not send (Kafka was down) never arrives: the order of
+  a successful payment stays `PENDING` until somebody repairs it by hand.
+- A record that fails with a temporary error is retried while the listener thread waits, so the
+  other records of its partitions wait too (at most about eight seconds per record).
+- The retry of an error that may be temporary (the database) is classified in the configuration
+  and checked only by its pauses; no test breaks the database to see a retry.
 
 ## Tests
 
@@ -306,6 +414,12 @@ and `KeySetOutageTest`.
 
 The profile files are read by `SpringProfilesTest` without starting Spring.
 
+The integration tests also start a Kafka container (image `apache/kafka`, the same as in the
+Compose files) in the same shared context. The listener of the application does not start with
+the context: a test of the consumer starts it for its class and stops it afterwards, and waits
+until the group has consumed every record before it ends. Otherwise an event of one test could
+reach the order of the next one, because every test starts the ids again.
+
 The User Service is played by WireMock. Tests of the client use a generous read timeout (10 s)
 and a short one only in the test that proves the timeout; the breaker tests switch its state with
 `transitionTo...State()` and never wait for a clock.
@@ -321,6 +435,8 @@ Every public method of the service layer has unit tests (plain Mockito, no Sprin
 | `ItemService` (`create`, `getById`, `getAll`, `update`, `delete`) | `ItemServiceTest` | `ItemApiIntegrationTest` |
 | `UserInfoResolver`, `UserServiceClient` (the User Service, the breaker) | `UserInfoResolverTest`, `UserServiceClientTest` | `OrderOwnerDataApiIntegrationTest` |
 | `PriceCalculator`, `Caller` | `PriceCalculatorTest`, `CallerTest` | `OrderApiIntegrationTest` (prices) |
+| `OrderService.applyPaymentResult` (the payment events) | `OrderServiceTest` | `PaymentEventConsumerIntegrationTest`, `PaymentEventCancelRaceIntegrationTest` |
+| `PaymentEventListener`, `PaymentEvent`, the error handling and the topics | `PaymentEventListenerTest`, `PaymentEventTest`, `KafkaErrorHandlingConfigTest`, `KafkaTopicConfigTest` | `PaymentEventConsumerIntegrationTest`, `KafkaTopicIntegrationTest` |
 
 The API tests send real requests with real tokens to the whole application. They prove what the
 unit tests cannot: what is stored and what the answers show, ownership with two users, the
@@ -332,9 +448,8 @@ real database: it shows what `@Version` of an order notices and what it does not
 every write takes a row lock.
 
 The helpers of the API tests (`ApiSupport`) are static and touch no Spring context: all
-integration tests share one context and one PostgreSQL container. An order becomes PAID only by
-a payment event, which arrives with the Kafka consumer; until then the tests set that status with
-SQL.
+integration tests share one context and one PostgreSQL container. The tests of the API set the
+status PAID or PAYMENT_FAILED with SQL; the tests of the consumer produce it by an event.
 
 Only the unit tests, to see what they cover:
 

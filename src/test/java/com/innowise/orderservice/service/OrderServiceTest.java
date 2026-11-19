@@ -14,6 +14,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.innowise.orderservice.TestEntities;
+import com.innowise.orderservice.dto.event.PaymentEvent;
+import com.innowise.orderservice.dto.event.PaymentOutcome;
 import com.innowise.orderservice.dto.request.OrderItemRequest;
 import com.innowise.orderservice.dto.request.OrderRequest;
 import com.innowise.orderservice.dto.response.OrderResponse;
@@ -21,6 +23,7 @@ import com.innowise.orderservice.entity.Item;
 import com.innowise.orderservice.entity.Order;
 import com.innowise.orderservice.entity.OrderItem;
 import com.innowise.orderservice.entity.OrderStatus;
+import com.innowise.orderservice.exception.InvalidPaymentEventException;
 import com.innowise.orderservice.exception.ItemNotAvailableException;
 import com.innowise.orderservice.exception.OrderNotDeletableException;
 import com.innowise.orderservice.exception.OrderNotEditableException;
@@ -31,12 +34,16 @@ import com.innowise.orderservice.mapper.OrderMapperImpl;
 import com.innowise.orderservice.repository.ItemRepository;
 import com.innowise.orderservice.repository.OrderRepository;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
@@ -483,5 +490,190 @@ class OrderServiceTest {
 
     assertThrows(OrderNotFoundException.class,
       () -> orderService.getById(ORDER_ID, new Caller(null, null, false)));
+  }
+
+  // ---- payment events
+
+  /** The order of the tests below: 49.90 in total, owned by user 7. */
+  private static Order orderInStatus(OrderStatus status) {
+    Order order = TestEntities.order(ORDER_ID, 7L, "buyer@example.com",
+      TestEntities.line(KEYBOARD, 1, "49.90"));
+    switch (status) {
+      case PENDING -> { }
+      case PAID -> order.markPaid();
+      case PAYMENT_FAILED -> order.markPaymentFailed();
+      case CANCELLED -> order.cancel();
+    }
+    return order;
+  }
+
+  /** The payer (8) and the order (5) differ from the owner (7) on purpose. */
+  private static PaymentEvent paymentEvent(PaymentOutcome status, Long orderId, Long userId,
+    String amount) {
+    return new PaymentEvent(UUID.fromString("4d1f8f3e-0c0b-3b52-9c7e-1f6a2d9b7a10"),
+      PaymentEvent.CREATE_PAYMENT, "pay-1", orderId, userId, status, amount,
+      Instant.parse("2026-11-16T10:00:00Z"));
+  }
+
+  private static PaymentEvent paymentOf(PaymentOutcome status) {
+    return paymentEvent(status, ORDER_ID, 7L, "49.90");
+  }
+
+  private void orderExists(Order order) {
+    when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(order));
+  }
+
+  @ParameterizedTest
+  @EnumSource(value = OrderStatus.class, names = {"PENDING", "PAYMENT_FAILED"})
+  void aSuccessfulPaymentPaysAnOrderThatWaitsForIt(OrderStatus before) {
+    Order order = orderInStatus(before);
+    orderExists(order);
+
+    PaymentEventResult result = orderService.applyPaymentResult(paymentOf(PaymentOutcome.SUCCESS));
+
+    assertAll(
+      () -> assertEquals(PaymentEventResult.APPLIED, result),
+      () -> assertEquals(OrderStatus.PAID, order.getStatus()),
+      () -> verify(orderRepository).saveAndFlush(order));
+  }
+
+  @Test
+  void aFailedPaymentMarksAPendingOrder() {
+    Order order = orderInStatus(OrderStatus.PENDING);
+    orderExists(order);
+
+    PaymentEventResult result = orderService.applyPaymentResult(paymentOf(PaymentOutcome.FAILED));
+
+    assertAll(
+      () -> assertEquals(PaymentEventResult.APPLIED, result),
+      () -> assertEquals(OrderStatus.PAYMENT_FAILED, order.getStatus()),
+      () -> verify(orderRepository).saveAndFlush(order));
+  }
+
+  @Test
+  void theSameEventAgainChangesNothing() {
+    Order paid = orderInStatus(OrderStatus.PAID);
+    orderExists(paid);
+
+    PaymentEventResult again = orderService.applyPaymentResult(paymentOf(PaymentOutcome.SUCCESS));
+
+    assertAll(
+      () -> assertEquals(PaymentEventResult.ALREADY_APPLIED, again),
+      () -> assertEquals(OrderStatus.PAID, paid.getStatus()),
+      () -> verify(orderRepository, never()).saveAndFlush(any()));
+  }
+
+  @Test
+  void aFailedPaymentOfAnOrderThatIsMarkedAsFailedAlreadyChangesNothing() {
+    Order failed = orderInStatus(OrderStatus.PAYMENT_FAILED);
+    orderExists(failed);
+
+    PaymentEventResult again = orderService.applyPaymentResult(paymentOf(PaymentOutcome.FAILED));
+
+    assertAll(
+      () -> assertEquals(PaymentEventResult.ALREADY_APPLIED, again),
+      () -> assertEquals(OrderStatus.PAYMENT_FAILED, failed.getStatus()),
+      () -> verify(orderRepository, never()).saveAndFlush(any()));
+  }
+
+  @ParameterizedTest
+  @EnumSource(value = OrderStatus.class, names = {"PAID", "CANCELLED"})
+  void aFailedPaymentThatArrivesLateIsIgnored(OrderStatus before) {
+    Order order = orderInStatus(before);
+    orderExists(order);
+
+    PaymentEventResult result = orderService.applyPaymentResult(paymentOf(PaymentOutcome.FAILED));
+
+    assertAll(
+      () -> assertEquals(PaymentEventResult.IGNORED, result),
+      () -> assertEquals(before, order.getStatus()),
+      () -> verify(orderRepository, never()).saveAndFlush(any()));
+  }
+
+  @Test
+  void aSuccessfulPaymentOfACancelledOrderLeavesItCancelled() {
+    Order cancelled = orderInStatus(OrderStatus.CANCELLED);
+    orderExists(cancelled);
+
+    PaymentEventResult result = orderService.applyPaymentResult(paymentOf(PaymentOutcome.SUCCESS));
+
+    assertAll(
+      () -> assertEquals(PaymentEventResult.ORDER_CANCELLED, result),
+      () -> assertEquals(OrderStatus.CANCELLED, cancelled.getStatus()),
+      () -> verify(orderRepository, never()).saveAndFlush(any()));
+  }
+
+  @Test
+  void anEventOfAnOrderThatDoesNotExistIsNotAnError() {
+    when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.empty());
+
+    PaymentEventResult result = orderService.applyPaymentResult(paymentOf(PaymentOutcome.SUCCESS));
+
+    assertAll(
+      () -> assertEquals(PaymentEventResult.ORDER_NOT_FOUND, result),
+      () -> verify(orderRepository, never()).saveAndFlush(any()));
+  }
+
+  @Test
+  void aPayerWhoIsNotTheOwnerChangesNothing() {
+    Order order = orderInStatus(OrderStatus.PENDING);
+    orderExists(order);
+
+    PaymentEventResult result = orderService.applyPaymentResult(
+      paymentEvent(PaymentOutcome.SUCCESS, ORDER_ID, 8L, "49.90"));
+
+    assertAll(
+      () -> assertEquals(PaymentEventResult.OWNER_MISMATCH, result),
+      () -> assertEquals(OrderStatus.PENDING, order.getStatus()),
+      () -> verify(orderRepository, never()).saveAndFlush(any()));
+  }
+
+  @ParameterizedTest
+  @EnumSource(PaymentOutcome.class)
+  void anAmountThatIsNotTheTotalChangesNothingForEitherOutcome(PaymentOutcome outcome) {
+    Order order = orderInStatus(OrderStatus.PENDING);
+    orderExists(order);
+
+    PaymentEventResult result = orderService.applyPaymentResult(
+      paymentEvent(outcome, ORDER_ID, 7L, "49.00"));
+
+    assertAll(
+      () -> assertEquals(PaymentEventResult.AMOUNT_MISMATCH, result),
+      () -> assertEquals(OrderStatus.PENDING, order.getStatus()),
+      () -> verify(orderRepository, never()).saveAndFlush(any()));
+  }
+
+  @Test
+  void theAmountIsComparedAsANumberNotAsText() {
+    Order order = orderInStatus(OrderStatus.PENDING);
+    orderExists(order);
+
+    PaymentEventResult result = orderService.applyPaymentResult(
+      paymentEvent(PaymentOutcome.SUCCESS, ORDER_ID, 7L, " 49.9 "));
+
+    assertAll(
+      () -> assertEquals(PaymentEventResult.APPLIED, result),
+      () -> assertEquals(OrderStatus.PAID, order.getStatus()));
+  }
+
+  @Test
+  void anEventThatCannotBeReadIsRefusedBeforeTheDatabaseIsTouched() {
+    InvalidPaymentEventException notANumber = assertThrows(InvalidPaymentEventException.class,
+      () -> orderService.applyPaymentResult(
+        paymentEvent(PaymentOutcome.SUCCESS, ORDER_ID, 7L, "forty-nine")));
+
+    assertAll(
+      () -> assertThrows(InvalidPaymentEventException.class, () -> orderService
+        .applyPaymentResult(paymentEvent(PaymentOutcome.SUCCESS, null, 7L, "49.90"))),
+      () -> assertThrows(InvalidPaymentEventException.class, () -> orderService
+        .applyPaymentResult(paymentEvent(PaymentOutcome.SUCCESS, ORDER_ID, null, "49.90"))),
+      () -> assertThrows(InvalidPaymentEventException.class, () -> orderService
+        .applyPaymentResult(paymentEvent(null, ORDER_ID, 7L, "49.90"))),
+      () -> assertThrows(InvalidPaymentEventException.class, () -> orderService
+        .applyPaymentResult(paymentEvent(PaymentOutcome.SUCCESS, ORDER_ID, 7L, null))),
+      () -> assertThrows(InvalidPaymentEventException.class, () -> orderService
+        .applyPaymentResult(paymentEvent(PaymentOutcome.SUCCESS, ORDER_ID, 7L, " "))),
+      () -> assertFalse(notANumber.getMessage().contains("forty-nine")),
+      () -> verifyNoInteractions(orderRepository));
   }
 }

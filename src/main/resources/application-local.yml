@@ -4,6 +4,9 @@
 spring:
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5435}/${DB_NAME:order_service_db}
+  kafka:
+    # The broker of the Compose file of the Payment Service, published on the loopback interface.
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
 app:
   security:
     # The internal address of the Authentication Service, never the address of the API Gateway.
